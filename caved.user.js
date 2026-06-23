@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         케이브덕 커스텀 스크립트 매니저 v4
+// @name         케이브덕 커스텀 매니저 v5 (최적화 & 버그픽스)
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  케이브덕 메인페이지 필터링/차단/마스킹 (태그칩 매칭, 공식크리에이터 차단 포함, 사이드 패널 + 실시간 미리보기)
+// @version      5.0
+// @description  케이브덕 메인페이지 UI 커스텀, 텍스트 기반 성향 필터링, 표지 마스킹, 섹션 숨기기
 // @match        *://caveduck.io/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -14,435 +14,348 @@
     'use strict';
 
     /* =========================================================
-       0. 설정
+       1. 설정 및 상태 관리
        ========================================================= */
-    const CONFIG_KEY = 'caveduck_advanced_config_v4';
-
+    const CONFIG_KEY = 'caveduck_advanced_config_v5';
     const defaultConfig = {
         hideBanner: false,
         hideOfficial: false,
         hidePopular: false,
         hideWorld: false,
-        filterGender: 'none',       // none | female | male  (서버 선호캐릭터 보조용)
-        maskOppositeGender: false,
-        preferTags: '',             // 콤마 구분 — 태그 칩과 매칭
-        blockedCreators: ''         // 콤마 구분, @ 제외
+        genderFilter: 'none', // none, blockMale, blockFemale
+        maskGender: 'none',   // none, maskMale, maskFemale
+        blockedCreators: '',  // 콤마로 구분
+        favoriteCreators: '', // 콤마로 구분 (강조 표시)
+        blockedTags: '',      // 보기 싫은 태그/단어 차단
     };
 
     let config = { ...defaultConfig, ...GM_getValue(CONFIG_KEY, {}) };
-    function saveConfig(patch) {
-        config = { ...config, ...patch };
+    let stats = { total: 0, hidden: 0, masked: 0, highlight: 0 };
+    let updateTimeout = null;
+
+    function saveConfig() {
         GM_setValue(CONFIG_KEY, config);
+        applyFilters();
+        updateUIStats();
     }
 
     /* =========================================================
-       1. 실제 케이브덕 i18n 문자열 기준 섹션 헤딩 키워드
-       (Next.js RSC 페이로드에서 직접 확인한 한국어 원문)
+       2. 스타일 주입 (UI 및 하이라이트 용)
        ========================================================= */
-    const SECTION_KEYWORDS = {
-        banner: ['공식 드리미코어', '딴딴 명탕이'], // 배너는 캠페인마다 텍스트가 바뀌므로 휴리스틱도 같이 사용
-        official: ['자랑스러운 공식 크리에이터'],
-        popular: ['인기 캐릭터'],
-        world: ['추천 세계관을 만나보세요', '새로운 세계관을 만나보세요', '세계관'],
-        recommended: ['추천하는 캐릭터'],
-        trending: ['실시간 급상승 캐릭터'],
-        recent: ['최신 캐릭터 라인업']
-    };
+    GM_addStyle(`
+        /* 커스텀 UI 설정 버튼 (좌측 하단 배치로 우측 채널톡과 안겹치게) */
+        #cd-settings-btn {
+            position: fixed; left: 20px; bottom: 20px; z-index: 9999;
+            background: #FF5A5F; color: white; border: none;
+            padding: 12px 20px; border-radius: 30px; font-weight: bold;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3); cursor: pointer;
+            transition: all 0.2s; font-size: 14px;
+        }
+        #cd-settings-btn:hover { background: #ff3b41; transform: translateY(-2px); }
 
-    // 게임/캐릭터 성향 태그 (케이브덕 공식 태그 체계 기준)
-    const TAG_LABELS = {
-        female: ['BL', '순애', '순정', '역하렘'], // 여성향으로 분류되는 대표 태그
-        male: ['백합', '하렘', 'GL']               // 남성향으로 분류되는 대표 태그
-    };
+        /* 커스텀 모달 창 */
+        #cd-modal-bg {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.7); z-index: 10000; display: none;
+            justify-content: center; align-items: center; backdrop-filter: blur(5px);
+        }
+        #cd-modal {
+            background: #1e1e24; color: #eee; width: 90%; max-width: 500px;
+            max-height: 85vh; overflow-y: auto; border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid #333;
+            display: flex; flex-direction: column;
+        }
+        .cd-header { padding: 20px; border-bottom: 1px solid #333; font-size: 18px; font-weight: bold; display: flex; justify-content: space-between; position:sticky; top:0; background:#1e1e24; z-index:10; }
+        .cd-close { cursor: pointer; color: #888; font-size: 24px; line-height: 1; }
+        .cd-close:hover { color: #fff; }
+        .cd-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .cd-stats { background: #2a2a35; padding: 15px; border-radius: 8px; font-size: 13px; line-height: 1.6; border: 1px solid #444; }
+        
+        /* 폼 요소 스타일 */
+        .cd-group { display: flex; flex-direction: column; gap: 5px; }
+        .cd-group label { font-size: 14px; font-weight: bold; color: #ddd; }
+        .cd-group small { font-size: 11px; color: #999; }
+        .cd-checkbox { display: flex; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
+        .cd-checkbox input { width: 16px; height: 16px; cursor: pointer; }
+        select, textarea { 
+            background: #2a2a35; color: white; border: 1px solid #444; 
+            padding: 10px; border-radius: 6px; font-size: 13px; width: 100%; outline: none;
+        }
+        textarea { resize: vertical; min-height: 60px; }
+        select:focus, textarea:focus { border-color: #FF5A5F; }
+        
+        /* 기능: 블러 및 하이라이트 클래스 */
+        .cd-blur-img img { filter: blur(20px) !important; transition: filter 0.3s; }
+        .cd-blur-img:hover img { filter: blur(5px) !important; } /* 마우스 올리면 살짝 보이게 */
+        
+        .cd-highlight-card { 
+            box-shadow: 0 0 0 3px #FF5A5F !important; 
+            border-radius: inherit; 
+            position: relative;
+        }
+        .cd-highlight-badge {
+            position: absolute; top: -10px; right: -10px; background: #FF5A5F; color: white;
+            font-size: 10px; padding: 3px 8px; border-radius: 10px; font-weight: bold; z-index: 10;
+        }
+    `);
 
     /* =========================================================
-       2. 섹션 찾기 — 헤딩 텍스트 직접 스캔 (CSS :contains는 무효이므로 사용 안 함)
-       ========================================================= */
-    const HEADING_SELECTOR = 'h1, h2, h3, h4, p, span, div';
-
-    function isOwnUI(el) {
-        return !!(el.closest && el.closest('#cd-panel, #cd-toggle-btn, #cd-overlay'));
-    }
-
-    function findSectionsByHeadingText(keywords) {
-        const found = new Set();
-        const candidates = document.querySelectorAll(HEADING_SELECTOR);
-
-        for (const el of candidates) {
-            if (isOwnUI(el)) continue;
-
-            const ownText = Array.from(el.childNodes)
-                .filter(n => n.nodeType === Node.TEXT_NODE)
-                .map(n => n.textContent.trim())
-                .join('');
-            const text = ownText || el.textContent.trim();
-            if (!text || text.length > 40) continue;
-
-            const hit = keywords.some(k => text.includes(k));
-            if (!hit) continue;
-
-            // 헤딩에서 위로 올라가며 카드/리스트를 포함한 의미있는 섹션 블록 추정
-            let node = el;
-            let candidate = el;
-            for (let depth = 0; depth < 6 && node.parentElement; depth++) {
-                node = node.parentElement;
-                const imgCount = node.querySelectorAll('img').length;
-                const linkCount = node.querySelectorAll('a').length;
-                if (imgCount >= 1 || linkCount >= 2) candidate = node;
-                if (node.parentElement === document.body) break;
-            }
-            found.add(candidate);
-        }
-        return Array.from(found);
-    }
-
-    function hideSections(marker, keywords) {
-        findSectionsByHeadingText(keywords).forEach(el => {
-            el.setAttribute(`data-cd-hidden-${marker}`, '1');
-            el.style.setProperty('display', 'none', 'important');
-        });
-    }
-
-    function unhideSections(marker) {
-        document.querySelectorAll(`[data-cd-hidden-${marker}]`).forEach(el => {
-            el.style.removeProperty('display');
-            el.removeAttribute(`data-cd-hidden-${marker}`);
-        });
-    }
-
-    // 메인 상단 대형 배너 — 헤딩이 거의 없는 캐러셀이라 별도 휴리스틱
-    function hideTopBannerByHeuristic() {
-        const candidates = document.querySelectorAll(
-            '[class*="banner" i], [class*="swiper" i], [class*="carousel" i], [class*="slide" i]'
-        );
-        candidates.forEach(el => {
-            if (isOwnUI(el)) return;
-            const rect = el.getBoundingClientRect();
-            if (rect.width < 300 || rect.height < 80) return;
-            el.setAttribute('data-cd-hidden-banner', '1');
-            el.style.setProperty('display', 'none', 'important');
-        });
-    }
-
-    function applySectionVisibility() {
-        ['banner', 'official', 'popular', 'world'].forEach(unhideSections);
-
-        if (config.hideBanner) {
-            hideSections('banner', SECTION_KEYWORDS.banner);
-            hideTopBannerByHeuristic();
-        }
-        if (config.hideOfficial) hideSections('official', SECTION_KEYWORDS.official);
-        if (config.hidePopular) hideSections('popular', SECTION_KEYWORDS.popular);
-        if (config.hideWorld) hideSections('world', SECTION_KEYWORDS.world);
-    }
-
-    /* =========================================================
-       3. 카드 처리 — 일반 카드 + 공식 크리에이터 칸 카드 모두 동일 차단 로직 적용
-       ========================================================= */
-
-    function extractHandle(card) {
-        const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
-        let node;
-        while ((node = walker.nextNode())) {
-            const t = node.textContent.trim();
-            if (t.startsWith('@') && t.length > 1) return t.slice(1).toLowerCase();
-        }
-        return null;
-    }
-
-    // 카드 안에 표시된 태그 칩 텍스트들을 모아서 반환 (짧고 반복적인 라벨 형태 텍스트 노드 위주로 수집)
-    function extractTagChips(card) {
-        const chips = [];
-        const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
-        let node;
-        while ((node = walker.nextNode())) {
-            const t = node.textContent.trim();
-            // 태그 칩은 보통 짧은 한 단어. 너무 길면 제목/설명일 확률이 높아 제외.
-            if (t && t.length > 0 && t.length <= 12 && !t.startsWith('@')) {
-                chips.push(t);
-            }
-        }
-        return chips;
-    }
-
-    function findAllCharacterCards() {
-        // 일반 추천/인기/신작 카드 + 공식 크리에이터 칸의 카드 모두 동일하게 a[href*="/character"] 기준으로 잡힘
-        const links = document.querySelectorAll('a[href*="/character"], a[href*="/characters/"]');
-        const cards = new Set();
-        links.forEach(a => { if (!isOwnUI(a)) cards.add(a); });
-        return Array.from(cards);
-    }
-
-    function processCharacterCards() {
-        const cards = findAllCharacterCards();
-        if (cards.length === 0) return { total: 0, hidden: 0, masked: 0 };
-
-        const blockedList = config.blockedCreators
-            .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-        const preferTags = config.preferTags
-            .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-
-        let hiddenCount = 0;
-        let maskedCount = 0;
-
-        cards.forEach(card => {
-            const handle = extractHandle(card);
-            const chips = extractTagChips(card).map(c => c.toLowerCase());
-            const fullText = card.textContent.toLowerCase();
-
-            let shouldHide = false;
-            let shouldMask = false;
-
-            // 차단 — 일반 카드든 공식 크리에이터 칸 카드든 동일하게 적용 (정확히 일치하는 핸들만)
-            if (blockedList.length > 0 && handle && blockedList.includes(handle)) {
-                shouldHide = true;
-            }
-
-            // 성향 필터 — 태그 칩을 우선 사용, 칩이 없으면 텍스트 키워드로 보조 판단
-            const chipHitFemale = TAG_LABELS.female.some(t => chips.includes(t.toLowerCase()));
-            const chipHitMale = TAG_LABELS.male.some(t => chips.includes(t.toLowerCase()));
-            const textHitFemale = TAG_LABELS.female.some(t => fullText.includes(t.toLowerCase()));
-            const textHitMale = TAG_LABELS.male.some(t => fullText.includes(t.toLowerCase()));
-
-            const isFemaleOriented = chipHitFemale || textHitFemale;
-            const isMaleOriented = chipHitMale || textHitMale;
-
-            if (!shouldHide) {
-                if (config.filterGender === 'female' && isMaleOriented && !isFemaleOriented) {
-                    if (config.maskOppositeGender) shouldMask = true; else shouldHide = true;
-                }
-                if (config.filterGender === 'male' && isFemaleOriented && !isMaleOriented) {
-                    if (config.maskOppositeGender) shouldMask = true; else shouldHide = true;
-                }
-            }
-
-            // 선호 태그 — 태그 칩에 매칭되면 표시(테두리 강조), 매칭 안 되면 그대로 둠 (비선호라고 숨기진 않음)
-            let prefMatched = false;
-            if (!shouldHide && preferTags.length > 0) {
-                prefMatched = preferTags.some(pt => chips.some(c => c.includes(pt)) || fullText.includes(pt));
-            }
-
-            if (shouldHide) {
-                card.setAttribute('data-cd-card-hidden', '1');
-                card.style.setProperty('display', 'none', 'important');
-                hiddenCount++;
-                return;
-            }
-
-            if (card.hasAttribute('data-cd-card-hidden')) {
-                card.style.removeProperty('display');
-                card.removeAttribute('data-cd-card-hidden');
-            }
-
-            const img = card.querySelector('img');
-            if (img) {
-                if (shouldMask) {
-                    img.style.filter = 'blur(18px)';
-                    img.style.transition = 'filter 0.25s ease';
-                    if (!img.dataset.cdMaskBound) {
-                        img.addEventListener('mouseenter', () => { img.style.filter = 'blur(0px)'; });
-                        img.addEventListener('mouseleave', () => { img.style.filter = 'blur(18px)'; });
-                        img.dataset.cdMaskBound = '1';
-                    }
-                    maskedCount++;
-                } else {
-                    img.style.filter = '';
-                }
-            }
-
-            card.style.outline = prefMatched ? '2px solid #E91E63' : '';
-            card.style.outlineOffset = prefMatched ? '2px' : '';
-        });
-
-        return { total: cards.length, hidden: hiddenCount, masked: maskedCount };
-    }
-
-    function applyAll() {
-        applySectionVisibility();
-        const stats = processCharacterCards();
-        updatePreview(stats);
-    }
-
-    /* =========================================================
-       4. DOM 변화 감지 (디바운스)
-       ========================================================= */
-    let debounceTimer = null;
-    function scheduleApply() {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(applyAll, 300);
-    }
-
-    const observer = new MutationObserver((mutations) => {
-        for (const m of mutations) {
-            const el = m.target.nodeType === Node.ELEMENT_NODE ? m.target : m.target.parentElement;
-            if (el && isOwnUI(el)) continue;
-            scheduleApply();
-            return;
-        }
-    });
-    function startObserver() {
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-
-    /* =========================================================
-       5. UI — 오른쪽 고정 패널 + 실시간 미리보기
+       3. UI 생성 및 이벤트 바인딩
        ========================================================= */
     function createUI() {
-        GM_addStyle(`
-            #cd-toggle-btn {
-                position: fixed; top: 50%; right: 0; transform: translateY(-50%);
-                background: #E91E63; color: #fff; border: none;
-                border-radius: 10px 0 0 10px; width: 42px; height: 64px;
-                font-size: 20px; cursor: pointer; z-index: 999990;
-                box-shadow: -2px 0 10px rgba(0,0,0,0.4);
-                display: flex; align-items: center; justify-content: center;
-            }
-            #cd-overlay {
-                display: none; position: fixed; inset: 0;
-                background: rgba(0,0,0,0.35); z-index: 999991;
-            }
-            #cd-panel {
-                display: none; position: fixed; top: 0; right: 0; bottom: 0;
-                width: 380px; max-width: 92vw; background: #16161a; color: #eee;
-                box-shadow: -6px 0 24px rgba(0,0,0,0.5); z-index: 999992;
-                overflow-y: auto; padding: 18px 18px 90px 18px; font-size: 13px; box-sizing: border-box;
-            }
-            #cd-panel h2 { font-size: 16px; margin: 0 0 14px; }
-            #cd-panel h3 { font-size: 13px; color: #f48fb1; margin: 18px 0 8px; border-bottom: 1px solid #333; padding-bottom: 6px; }
-            .cd-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 9px; }
-            .cd-row input[type="checkbox"] { margin-top: 2px; width: 15px; height: 15px; cursor: pointer; }
-            .cd-row label { cursor: pointer; line-height: 1.4; }
-            .cd-field { margin-bottom: 12px; }
-            .cd-field label { display: block; font-size: 12px; color: #aaa; margin-bottom: 4px; }
-            .cd-field input[type="text"], .cd-field select {
-                width: 100%; box-sizing: border-box; padding: 7px 8px;
-                background: #0e0e10; color: #fff; border: 1px solid #3a3a3a; border-radius: 5px;
-            }
-            .cd-help { font-size: 11px; color: #777; margin-top: 3px; display: block; }
-            #cd-preview-box {
-                background: #0e0e10; border: 1px solid #333; border-radius: 6px;
-                padding: 10px; font-size: 12px; line-height: 1.7;
-            }
-            #cd-preview-box b { color: #f48fb1; }
-            #cd-panel-actions {
-                position: sticky; bottom: -90px; margin-top: 20px;
-                display: flex; gap: 8px; background: #16161a; padding-top: 10px;
-            }
-            .cd-btn { flex: 1; padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; }
-            .cd-btn-save { background: #E91E63; color: #fff; }
-            .cd-btn-close { background: #3a3a3a; color: #eee; }
-        `);
-
-        const overlay = document.createElement('div');
-        overlay.id = 'cd-overlay';
-        document.body.appendChild(overlay);
-
+        // 열기 버튼
         const btn = document.createElement('button');
-        btn.id = 'cd-toggle-btn';
-        btn.textContent = '🛠';
-        btn.title = '케이브덕 UI 매니저 열기';
+        btn.id = 'cd-settings-btn';
+        btn.innerText = '⚙️ 케이브덕 설정';
         document.body.appendChild(btn);
 
-        const panel = document.createElement('div');
-        panel.id = 'cd-panel';
-        panel.innerHTML = `
-            <h2>🦆 케이브덕 UI 매니저</h2>
+        // 모달 컨테이너
+        const modalBg = document.createElement('div');
+        modalBg.id = 'cd-modal-bg';
+        modalBg.innerHTML = `
+            <div id="cd-modal">
+                <div class="cd-header">
+                    <span>⚙️ 커스텀 필터 설정</span>
+                    <span class="cd-close">&times;</span>
+                </div>
+                <div class="cd-content">
+                    <div class="cd-stats" id="cd-stats-box">
+                        통계 불러오는 중...
+                    </div>
 
-            <h3>레이아웃 숨기기</h3>
-            <div class="cd-row">
-                <input type="checkbox" id="cd-hideBanner" ${config.hideBanner ? 'checked' : ''}>
-                <label for="cd-hideBanner">메인 상단 대형 배너 숨기기</label>
-            </div>
-            <div class="cd-row">
-                <input type="checkbox" id="cd-hideOfficial" ${config.hideOfficial ? 'checked' : ''}>
-                <label for="cd-hideOfficial">'자랑스러운 공식 크리에이터' 칸 숨기기</label>
-            </div>
-            <div class="cd-row">
-                <input type="checkbox" id="cd-hidePopular" ${config.hidePopular ? 'checked' : ''}>
-                <label for="cd-hidePopular">'인기 캐릭터' 칸 숨기기</label>
-            </div>
-            <div class="cd-row">
-                <input type="checkbox" id="cd-hideWorld" ${config.hideWorld ? 'checked' : ''}>
-                <label for="cd-hideWorld">'세계관' 칸 숨기기</label>
-            </div>
+                    <div class="cd-group">
+                        <label>1. 레이아웃 숨기기 (새로고침 시 적용될 수 있음)</label>
+                        <label class="cd-checkbox"><input type="checkbox" id="cd-hideBanner"> 메인 배너 숨기기</label>
+                        <label class="cd-checkbox"><input type="checkbox" id="cd-hideOfficial"> '자랑스러운 공식 크리에이터' 숨기기</label>
+                        <label class="cd-checkbox"><input type="checkbox" id="cd-hidePopular"> '지금 인기있는 캐릭터' 숨기기</label>
+                        <label class="cd-checkbox"><input type="checkbox" id="cd-hideWorld"> '세계관' 영역 숨기기</label>
+                    </div>
 
-            <h3>성향 필터 / 마스킹</h3>
-            <div class="cd-field">
-                <label>주로 보고 싶은 성향 (태그 칩 우선 매칭)</label>
-                <select id="cd-filterGender">
-                    <option value="none" ${config.filterGender === 'none' ? 'selected' : ''}>모두 보기</option>
-                    <option value="female" ${config.filterGender === 'female' ? 'selected' : ''}>여성향 (BL/순애/순정/역하렘) 위주</option>
-                    <option value="male" ${config.filterGender === 'male' ? 'selected' : ''}>남성향 (백합/하렘/GL) 위주</option>
-                </select>
-                <span class="cd-help">⚠ 계정 설정 &gt; 선호 캐릭터에도 같은 옵션이 있어요. 거기서 설정해도 서버 추천이 100% 정확하지 않을 수 있어 이 필터로 한 번 더 거릅니다.</span>
-            </div>
-            <div class="cd-row">
-                <input type="checkbox" id="cd-maskOpposite" ${config.maskOppositeGender ? 'checked' : ''}>
-                <label for="cd-maskOpposite">반대 성향 카드는 숨기지 않고 <b>표지만</b> 모자이크 (제목/닉네임 노출, 마우스 올리면 해제)</label>
-            </div>
+                    <hr style="border-color:#333;">
 
-            <h3>선호 태그 (강조 표시)</h3>
-            <div class="cd-field">
-                <label>선호 태그 — 콤마로 구분</label>
-                <input type="text" id="cd-preferTags" value="${config.preferTags}" placeholder="예: 순애, 집착, 판타지">
-                <span class="cd-help">태그 칩과 일치하면 카드에 분홍 테두리로 강조 표시됩니다. (정렬 변경은 아님)</span>
-            </div>
+                    <div class="cd-group">
+                        <label>2. 성향 필터링 (카드 텍스트 분석)</label>
+                        <small>설명에 '여성향, 남성향, BL, GL' 등의 단어가 포함된 캐릭터를 숨깁니다.</small>
+                        <select id="cd-genderFilter">
+                            <option value="none">숨기지 않음</option>
+                            <option value="blockFemale">여성향/BL 숨기기 (남성향 유저용)</option>
+                            <option value="blockMale">남성향/GL 숨기기 (여성향 유저용)</option>
+                        </select>
+                    </div>
 
-            <h3>제작자 차단</h3>
-            <div class="cd-field">
-                <label>차단할 제작자 핸들 — 콤마로 구분, @ 제외</label>
-                <input type="text" id="cd-blockedCreators" value="${config.blockedCreators}" placeholder="예: dream_core, Nae">
-                <span class="cd-help">일반 카드뿐 아니라 '공식 크리에이터' 칸의 카드에도 동일하게 적용됩니다. 정확히 일치하는 핸들만 차단합니다.</span>
-            </div>
+                    <div class="cd-group">
+                        <label>3. 표지 모자이크 (텍스트 분석)</label>
+                        <small>카드는 보이되 사진만 블러 처리합니다. (제작자 이름은 보임)</small>
+                        <select id="cd-maskGender">
+                            <option value="none">사용 안 함</option>
+                            <option value="maskFemale">여성향/BL 캐릭터 사진 모자이크</option>
+                            <option value="maskMale">남성향/GL 캐릭터 사진 모자이크</option>
+                        </select>
+                    </div>
 
-            <h3>실시간 미리보기</h3>
-            <div id="cd-preview-box">설정을 변경하면 여기에 바로 반영됩니다.</div>
+                    <hr style="border-color:#333;">
 
-            <div id="cd-panel-actions">
-                <button class="cd-btn cd-btn-close" id="cd-btn-close">닫기</button>
-                <button class="cd-btn cd-btn-save" id="cd-btn-save">저장</button>
+                    <div class="cd-group">
+                        <label>4. 보기 싫은 단어/태그 차단</label>
+                        <small>콤마(,)로 구분. 제목이나 설명에 이 단어가 있으면 카드를 숨깁니다.</small>
+                        <textarea id="cd-blockedTags" placeholder="예: 공포, 얀데레, 고어"></textarea>
+                    </div>
+
+                    <div class="cd-group">
+                        <label>5. 특정 제작자 차단</label>
+                        <small>콤마(,)로 구분. @는 빼고 적으세요.</small>
+                        <textarea id="cd-blockedCreators" placeholder="예: 홍길동, user123"></textarea>
+                    </div>
+
+                    <div class="cd-group">
+                        <label>6. 즐겨찾기 제작자 (하이라이트)</label>
+                        <small>콤마(,)로 구분. 이 제작자의 캐릭터는 빨간 테두리로 강조됩니다.</small>
+                        <textarea id="cd-favoriteCreators" placeholder="예: 케이브덕공식, 갓제작자"></textarea>
+                    </div>
+                </div>
             </div>
         `;
-        document.body.appendChild(panel);
+        document.body.appendChild(modalBg);
 
-        function toggle(show) {
-            panel.style.display = show ? 'block' : 'none';
-            overlay.style.display = show ? 'block' : 'none';
-        }
-        btn.addEventListener('click', () => toggle(true));
-        overlay.addEventListener('click', () => toggle(false));
-        panel.querySelector('#cd-btn-close').addEventListener('click', () => toggle(false));
+        // 이벤트 연결
+        btn.addEventListener('click', () => modalBg.style.display = 'flex');
+        modalBg.querySelector('.cd-close').addEventListener('click', () => modalBg.style.display = 'none');
+        modalBg.addEventListener('click', (e) => { if (e.target === modalBg) modalBg.style.display = 'none'; });
 
-        function readDraft() {
-            return {
-                hideBanner: panel.querySelector('#cd-hideBanner').checked,
-                hideOfficial: panel.querySelector('#cd-hideOfficial').checked,
-                hidePopular: panel.querySelector('#cd-hidePopular').checked,
-                hideWorld: panel.querySelector('#cd-hideWorld').checked,
-                filterGender: panel.querySelector('#cd-filterGender').value,
-                maskOppositeGender: panel.querySelector('#cd-maskOpposite').checked,
-                preferTags: panel.querySelector('#cd-preferTags').value,
-                blockedCreators: panel.querySelector('#cd-blockedCreators').value
-            };
-        }
-
-        panel.querySelector('#cd-btn-save').addEventListener('click', () => {
-            saveConfig(readDraft());
-            applyAll();
+        // 값 초기화 및 리스너 등록
+        const fields = ['hideBanner', 'hideOfficial', 'hidePopular', 'hideWorld', 'genderFilter', 'maskGender', 'blockedTags', 'blockedCreators', 'favoriteCreators'];
+        
+        fields.forEach(id => {
+            const el = document.getElementById(`cd-${id}`);
+            if (el.type === 'checkbox') {
+                el.checked = config[id];
+                el.addEventListener('change', (e) => { config[id] = e.target.checked; saveConfig(); });
+            } else {
+                el.value = config[id];
+                el.addEventListener('input', (e) => { config[id] = e.target.value; saveConfig(); });
+            }
         });
-
-        panel.addEventListener('input', () => { config = { ...config, ...readDraft() }; applyAll(); });
-        panel.addEventListener('change', () => { config = { ...config, ...readDraft() }; applyAll(); });
     }
 
-    function updatePreview(stats) {
-        const box = document.getElementById('cd-preview-box');
-        if (!box) return;
-        box.innerHTML = `
-            현재 페이지 캐릭터 카드: <b>${stats.total}</b>개<br>
-            차단/필터로 숨김: <b>${stats.hidden}</b>개<br>
-            모자이크 처리: <b>${stats.masked}</b>개
-        `;
+    function updateUIStats() {
+        const box = document.getElementById('cd-stats-box');
+        if (box) {
+            box.innerHTML = `
+                <span style="color:#aaa">발견된 캐릭터 카드:</span> <b style="color:#fff">${stats.total}개</b><br>
+                <span style="color:#aaa">필터로 숨긴 카드:</span> <b style="color:#ff5a5f">${stats.hidden}개</b><br>
+                <span style="color:#aaa">모자이크된 표지:</span> <b style="color:#4facfe">${stats.masked}개</b><br>
+                <span style="color:#aaa">즐겨찾기 새 강조:</span> <b style="color:#ffea00">${stats.highlight}개</b>
+            `;
+        }
+    }
+
+    /* =========================================================
+       4. 핵심 필터링 로직
+       ========================================================= */
+    function applyFilters() {
+        // 배열 데이터 정리
+        const blockCreatorsList = config.blockedCreators.split(',').map(s => s.trim().toLowerCase()).filter(s => s);
+        const favCreatorsList = config.favoriteCreators.split(',').map(s => s.trim().toLowerCase()).filter(s => s);
+        const blockTagsList = config.blockedTags.split(',').map(s => s.trim().toLowerCase()).filter(s => s);
+
+        stats = { total: 0, hidden: 0, masked: 0, highlight: 0 };
+
+        // 4-1. 전체 섹션(칸) 숨기기 (텍스트 기반 탐색으로 정확도 상승)
+        const allHeaders = document.querySelectorAll('h1, h2, h3, div');
+        allHeaders.forEach(el => {
+            const text = el.textContent.trim();
+            if (!text) return;
+
+            let shouldHide = false;
+            if (config.hideOfficial && text.includes('자랑스러운 공식 크리에이터')) shouldHide = true;
+            if (config.hidePopular && text.includes('지금 인기있는 캐릭터')) shouldHide = true;
+            if (config.hideWorld && text.includes('세계관')) shouldHide = true;
+
+            if (shouldHide) {
+                // 부모 컨테이너(섹션 래퍼) 찾기. 보통 2~4단계 위에 있음.
+                let parent = el.parentElement;
+                let foundSection = false;
+                for(let i=0; i<5; i++) {
+                    if (parent && parent.tagName !== 'MAIN' && parent.tagName !== 'BODY') {
+                        // Tailwind 클래스 중 섹션을 나누는 여백 클래스가 있는지 확인
+                        if (parent.className.includes('mb-') || parent.className.includes('mt-') || parent.tagName === 'SECTION') {
+                            parent.style.display = 'none';
+                            foundSection = true;
+                            break;
+                        }
+                        parent = parent.parentElement;
+                    }
+                }
+                // 만약 못찾았으면 바로 위 부모라도 숨김
+                if(!foundSection && el.parentElement) el.parentElement.style.display = 'none';
+            }
+        });
+
+        // 배너 숨기기 (보통 최상단 스와이퍼나 큰 이미지 래퍼)
+        if (config.hideBanner) {
+            const banners = document.querySelectorAll('.swiper-container, [class*="banner"]');
+            banners.forEach(b => b.style.display = 'none');
+        }
+
+        // 4-2. 개별 캐릭터 카드 분석
+        // 캐릭터 카드는 링크 형태를 띄고 있음
+        const cards = document.querySelectorAll('a[href*="/character/"]');
+        
+        cards.forEach(card => {
+            // (1) 카드 내부 텍스트 긁어오기 (제목, 설명, 제작자 등 모두 포함)
+            const cardText = card.textContent.toLowerCase();
+            const rawText = card.textContent; 
+            
+            // 제작자 이름 추출 로직 (보통 @닉네임 형태)
+            let creatorName = "";
+            const match = rawText.match(/@([^\s]+)/);
+            if (match) creatorName = match[1].toLowerCase();
+
+            stats.total++;
+
+            // 초기화
+            card.style.display = '';
+            card.classList.remove('cd-blur-img', 'cd-highlight-card');
+            const oldBadge = card.querySelector('.cd-highlight-badge');
+            if (oldBadge) oldBadge.remove();
+
+            let isHidden = false;
+
+            // (2) 제작자 차단 확인
+            if (blockCreatorsList.includes(creatorName) || blockCreatorsList.some(c => cardText.includes(c))) {
+                isHidden = true;
+            }
+
+            // (3) 태그/단어 차단 확인
+            if (!isHidden && blockTagsList.some(tag => cardText.includes(tag))) {
+                isHidden = true;
+            }
+
+            // (4) 성향(Gender) 텍스트 분석
+            const isFemaleContent = cardText.includes('여성향') || cardText.includes('bl');
+            const isMaleContent = cardText.includes('남성향') || cardText.includes('gl') || cardText.includes('백합');
+
+            // 숨기기 처리
+            if (!isHidden) {
+                if (config.genderFilter === 'blockFemale' && isFemaleContent) isHidden = true;
+                if (config.genderFilter === 'blockMale' && isMaleContent) isHidden = true;
+            }
+
+            if (isHidden) {
+                // 완전히 숨기기
+                card.style.display = 'none';
+                stats.hidden++;
+                return; // 다음 카드로 넘어감
+            }
+
+            // (5) 표지 모자이크 처리 (숨겨지지 않은 카드 대상)
+            let shouldMask = false;
+            if (config.maskGender === 'maskFemale' && isFemaleContent) shouldMask = true;
+            if (config.maskGender === 'maskMale' && isMaleContent) shouldMask = true;
+
+            if (shouldMask) {
+                card.classList.add('cd-blur-img');
+                stats.masked++;
+            }
+
+            // (6) 즐겨찾기 제작자 신작 강조 표시
+            if (creatorName && favCreatorsList.includes(creatorName)) {
+                card.classList.add('cd-highlight-card');
+                const badge = document.createElement('div');
+                badge.className = 'cd-highlight-badge';
+                badge.innerText = '팔로우 제작자';
+                card.appendChild(badge);
+                stats.highlight++;
+            }
+        });
+
+        updateUIStats();
+    }
+
+    /* =========================================================
+       5. Mutation Observer (동적 로딩 감지 및 최적화)
+       ========================================================= */
+    // 케이브덕은 스크롤을 내릴때마다 카드가 로드되므로 감시가 필요함
+    // 디바운스(Debounce)를 적용하여 로딩 속도 저하 방지
+    function startObserver() {
+        const observer = new MutationObserver((mutations) => {
+            let shouldUpdate = false;
+            for (let m of mutations) {
+                if (m.addedNodes.length > 0) {
+                    shouldUpdate = true;
+                    break;
+                }
+            }
+
+            if (shouldUpdate) {
+                if (updateTimeout) clearTimeout(updateTimeout);
+                updateTimeout = setTimeout(() => {
+                    applyFilters();
+                }, 300); // 0.3초 딜레이 (여러번 호출되는 것 방지)
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
     }
 
     /* =========================================================
@@ -450,8 +363,9 @@
        ========================================================= */
     function init() {
         createUI();
+        // 페이지가 살짝 그려질 시간을 준 후 적용
         setTimeout(() => {
-            applyAll();
+            applyFilters();
             startObserver();
         }, 800);
     }
