@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         케이브덕 커스텀 매니저 v8 (초경량 & 태그 차단 필터)
+// @name         케이브덕 커스텀 매니저 v9 (태그 블라인드 & 제작자 차단 & 프리미엄 디자인)
 // @namespace    http://tampermonkey.net/
-// @version      8.0
-// @description  우측 고정 슬라이드 패널 디자인, 메인 배너 숨기기, 선호 태그 분홍 테두리 강조, 보기 싫은 단어/태그 완벽 차단 및 숨김 (초경량 성능 최적화)
+// @version      9.0
+// @description  우측 고정 슬라이드 패널, 대형 배너 완전 제거, 노란색 글로우 선호 태그 강조, 보기 싫은 태그 반투명 블라인드, 특정 제작자 완전 차단
 // @match        *://caveduck.io/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -14,17 +14,18 @@
     'use strict';
 
     /* =========================================================
-       1. 설정 및 상태 관리 (불필요한 숨김, 성향 필터, 제작자 차단 완벽 제거)
+       1. 설정 및 상태 관리
        ========================================================= */
-    const CONFIG_KEY = 'caveduck_advanced_config_v8';
+    const CONFIG_KEY = 'caveduck_advanced_config_v9';
     const defaultConfig = {
         hideBanner: false,
-        preferTags: '',  // 콤마 구분 - 매칭 시 분홍색 테두리 강조
-        blockedTags: ''  // 콤마 구분 - 매칭 시 카드 블라인드(숨김)
+        preferTags: '',       // 콤마 구분 - 매칭 시 노란색 부드러운 글로우 강조
+        blockedTags: '',      // 콤마 구분 - 매칭 시 완전히 없애지 않고 흐릿하게 블라인드
+        blockedCreators: ''   // 콤마 구분 - 매칭 시 카드 완전 삭제(display: none)
     };
 
     let config = { ...defaultConfig, ...GM_getValue(CONFIG_KEY, {}) };
-    let stats = { total: 0, hidden: 0, highlight: 0 };
+    let stats = { total: 0, hidden: 0, masked: 0, highlight: 0 };
     let updateTimeout = null;
 
     function saveConfig(patch) {
@@ -34,75 +35,95 @@
     }
 
     /* =========================================================
-       2. 스타일 주입 (우측 슬라이드 패널 UI 및 카드 디자인)
+       2. 스타일 주입 (디자인 전면 개선)
        ========================================================= */
     GM_addStyle(`
-        /* 우측 중앙 고정 설정 버튼 (우측 하단 문의창과 안 겹치게 배치) */
+        /* 우측 중앙 고정 설정 버튼 */
         #cd-toggle-btn {
             position: fixed; top: 50%; right: 0; transform: translateY(-50%);
-            background: #E91E63; color: #fff; border: none;
-            border-radius: 10px 0 0 10px; width: 42px; height: 64px;
-            font-size: 20px; cursor: pointer; z-index: 999990;
-            box-shadow: -2px 0 10px rgba(0,0,0,0.4);
+            background: #FFD700; color: #111; border: none;
+            border-radius: 12px 0 0 12px; width: 44px; height: 68px;
+            font-size: 22px; cursor: pointer; z-index: 999990;
+            box-shadow: -2px 0 12px rgba(0,0,0,0.5);
             display: flex; align-items: center; justify-content: center;
-            transition: background 0.2s;
+            transition: all 0.25s ease;
+            font-weight: bold;
         }
-        #cd-toggle-btn:hover { background: #ff2c78; }
+        #cd-toggle-btn:hover { background: #ffea00; transform: translateY(-50%) scaleX(1.05); }
 
         /* 배경 블러 오버레이 */
         #cd-overlay {
             display: none; position: fixed; inset: 0;
-            background: rgba(0,0,0,0.4); z-index: 999991;
-            backdrop-filter: blur(2px);
+            background: rgba(0,0,0,0.5); z-index: 999991;
+            backdrop-filter: blur(3px);
         }
 
         /* 우측 슬라이드 패널 */
         #cd-panel {
             display: none; position: fixed; top: 0; right: 0; bottom: 0;
-            width: 360px; max-width: 90vw; background: #16161a; color: #eee;
-            box-shadow: -6px 0 24px rgba(0,0,0,0.5); z-index: 999992;
-            overflow-y: auto; padding: 20px; font-size: 13px; box-sizing: border-box;
-            border-left: 1px solid #2d2d35;
+            width: 370px; max-width: 90vw; background: #121215; color: #eee;
+            box-shadow: -8px 0 32px rgba(0,0,0,0.7); z-index: 999992;
+            overflow-y: auto; padding: 24px 20px; font-size: 13px; box-sizing: border-box;
+            border-left: 1px solid #2a2a35;
+            transition: all 0.3s ease;
         }
-        #cd-panel h2 { font-size: 16px; margin: 0 0 15px; font-weight: bold; color: #fff; }
-        #cd-panel h3 { font-size: 13px; color: #f48fb1; margin: 20px 0 10px; border-bottom: 1px solid #2d2d35; padding-bottom: 6px; font-weight: bold; }
+        #cd-panel h2 { font-size: 17px; margin: 0 0 15px; font-weight: 800; color: #fff; border-left: 4px solid #FFD700; padding-left: 10px; }
+        #cd-panel h3 { font-size: 13px; color: #FFD700; margin: 24px 0 12px; border-bottom: 1px solid #2a2a35; padding-bottom: 8px; font-weight: bold; }
         
         /* 설정 요소 스타일 */
-        .cd-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-        .cd-row input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #E91E63; }
-        .cd-row label { cursor: pointer; font-size: 13px; color: #ddd; }
+        .cd-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .cd-row input[type="checkbox"] { width: 17px; height: 17px; cursor: pointer; accent-color: #FFD700; }
+        .cd-row label { cursor: pointer; font-size: 13.5px; color: #ddd; font-weight: 500; }
         
-        .cd-field { margin-bottom: 15px; }
-        .cd-field label { display: block; font-size: 12px; color: #aaa; margin-bottom: 6px; font-weight: bold; }
+        .cd-field { margin-bottom: 16px; }
+        .cd-field label { display: block; font-size: 12.5px; color: #ccc; margin-bottom: 6px; font-weight: bold; }
         .cd-field input[type="text"] {
-            width: 100%; box-sizing: border-box; padding: 8px 10px;
-            background: #0e0e10; color: #fff; border: 1px solid #3a3a3a; border-radius: 6px;
-            font-size: 13px; outline: none; transition: border-color 0.2s;
+            width: 100%; box-sizing: border-box; padding: 9px 12px;
+            background: #1a1a22; color: #fff; border: 1px solid #3e3e4f; border-radius: 8px;
+            font-size: 13px; outline: none; transition: all 0.2s;
         }
-        .cd-field input[type="text"]:focus { border-color: #E91E63; }
-        .cd-help { font-size: 11px; color: #777; margin-top: 4px; display: block; line-height: 1.4; }
+        .cd-field input[type="text"]:focus { border-color: #FFD700; box-shadow: 0 0 8px rgba(255, 215, 0, 0.2); }
+        .cd-help { font-size: 11px; color: #888; margin-top: 5px; display: block; line-height: 1.45; }
 
         /* 실시간 통계 박스 */
         #cd-preview-box {
-            background: #0e0e10; border: 1px solid #2d2d35; border-radius: 8px;
-            padding: 12px; font-size: 12px; line-height: 1.8; margin-top: 15px;
+            background: #1a1a22; border: 1px solid #2d2d3a; border-radius: 10px;
+            padding: 14px; font-size: 12px; line-height: 1.8; margin-top: 18px;
         }
-        #cd-preview-box b { color: #f48fb1; }
+        #cd-preview-box b { color: #FFD700; }
 
         /* 패널 하단 액션 버튼 */
         #cd-panel-actions {
-            margin-top: 25px; display: flex; gap: 10px;
+            margin-top: 30px; display: flex; gap: 10px;
         }
-        .cd-btn { flex: 1; padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; transition: opacity 0.2s; }
-        .cd-btn:hover { opacity: 0.9; }
-        .cd-btn-save { background: #E91E63; color: #fff; }
-        .cd-btn-close { background: #3a3a3a; color: #eee; }
+        .cd-btn { flex: 1; padding: 11px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 13px; transition: all 0.2s; }
+        .cd-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        .cd-btn-save { background: #FFD700; color: #111; }
+        .cd-btn-close { background: #2d2d3a; color: #eee; }
 
-        /* 선호 태그 매칭 시 분홍빛 카드 테두리 강조 효과 */
+        /* [개선] 선호 태그 매칭 시 - 고급스러운 노란색 그라데이션 글로우 & 곡선 테두리 */
         .cd-highlight-card {
-            outline: 2.5px solid #E91E63 !important;
-            outline-offset: 2px !important;
-            border-radius: inherit !important;
+            outline: 2px solid #FFD700 !important;
+            outline-offset: 1px !important;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.35) !important;
+            border-radius: 16px !important;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        }
+        .cd-highlight-card:hover {
+            box-shadow: 0 0 22px rgba(255, 215, 0, 0.55) !important;
+            transform: scale(1.02);
+        }
+
+        /* [수정] 차단 태그 매칭 시 - 완전 블라인드 대신 투명화 및 모자이크(계정은 보임) */
+        .cd-tag-masked-card {
+            opacity: 0.18 !important;
+            filter: blur(4px) grayscale(70%) !important;
+            pointer-events: auto !important; /* 마우스 오버 감지 허용 */
+            transition: all 0.35s ease !important;
+        }
+        .cd-tag-masked-card:hover {
+            opacity: 0.65 !important;
+            filter: blur(1px) grayscale(10%) !important; /* 마우스 올렸을 때만 대략 확인 가능 */
         }
     `);
 
@@ -123,7 +144,7 @@
         const panel = document.createElement('div');
         panel.id = 'cd-panel';
         panel.innerHTML = `
-            <h2>🦆 케이브덕 매니저 (v8)</h2>
+            <h2>🦆 케이브덕 매니저 (v9)</h2>
 
             <h3>1. 레이아웃 설정</h3>
             <div class="cd-row">
@@ -131,18 +152,25 @@
                 <label for="cd-hideBanner">메인 상단 대형 배너 숨기기</label>
             </div>
 
-            <h3>2. 선호 태그 강조</h3>
+            <h3>2. 선호 태그 강조 (디자인 개선)</h3>
             <div class="cd-field">
                 <label>강조할 선호 태그/단어 (콤마로 구분)</label>
                 <input type="text" id="cd-preferTags" value="${config.preferTags}" placeholder="예: 순애, 집착, 판타지">
-                <span class="cd-help">카드 본문이나 태그에 매칭되면 <b>분홍색 테두리</b>로 예쁘게 강조 표시됩니다.</span>
+                <span class="cd-help">카드나 태그에 매칭되면 <b>부드러운 곡선 테두리와 황금빛 글로우 효과</b>로 예쁘게 강조됩니다.</span>
             </div>
 
-            <h3>3. 보기 싫은 태그 차단</h3>
+            <h3>3. 보기 싫은 태그 블라인드</h3>
             <div class="cd-field">
-                <label>완전히 차단할 태그/단어 (콤마로 구분)</label>
-                <input type="text" id="cd-blockedTags" value="${config.blockedTags}" placeholder="예: 공포, 얀데레, 고어, BL">
-                <span class="cd-help">제목, 설명, 태그 중 하나라도 이 단어가 포함되면 해당 카드가 아예 보이지 않게 감춥니다.</span>
+                <label>블라인드 처리할 태그/단어 (콤마로 구분)</label>
+                <input type="text" id="cd-blockedTags" value="${config.blockedTags}" placeholder="예: 공포, 고어, BL">
+                <span class="cd-help">완전히 사라지지는 않고 <b>연한 모자이크 형태(반투명)</b>로 보이게 조절합니다. (계정/형태 확인 가능)</span>
+            </div>
+
+            <h3>4. 제작자 아예 차단</h3>
+            <div class="cd-field">
+                <label>완전히 차단할 제작자 (@ 제외, 콤마로 구분)</label>
+                <input type="text" id="cd-blockedCreators" value="${config.blockedCreators}" placeholder="예: dream_core, Nae">
+                <span class="cd-help">이곳에 작성된 제작자의 캐릭터 카드는 화면에서 흔적도 없이 완전히 숨겨집니다.</span>
             </div>
 
             <h3>📊 실시간 필터 미리보기</h3>
@@ -170,7 +198,8 @@
             return {
                 hideBanner: panel.querySelector('#cd-hideBanner').checked,
                 preferTags: panel.querySelector('#cd-preferTags').value,
-                blockedTags: panel.querySelector('#cd-blockedTags').value
+                blockedTags: panel.querySelector('#cd-blockedTags').value,
+                blockedCreators: panel.querySelector('#cd-blockedCreators').value
             };
         }
 
@@ -180,7 +209,7 @@
             toggle(false);
         });
 
-        // 입력 값 변경 시 실시간 필터 반영 (저장은 안 됨)
+        // 실시간 변경 내용 반영
         panel.addEventListener('input', () => {
             config = { ...config, ...readDraft() };
             applyAll();
@@ -196,55 +225,83 @@
         if (!box) return;
         box.innerHTML = `
             현재 페이지 캐릭터 카드: <b>${stats.total}</b>개<br>
-            태그 필터로 차단(숨김): <b style="color:#FF5A5F">${stats.hidden}</b>개<br>
-            선호 태그 매칭(강조): <b style="color:#ffea00">${stats.highlight}</b>개
+            제작자 차단으로 숨김: <b style="color:#FF5A5F">${stats.hidden}</b>개<br>
+            태그 필터 연한 블라인드: <b style="color:#4facfe">${stats.masked}</b>개<br>
+            선호 태그 매칭(황금 글로우): <b style="color:#FFD700">${stats.highlight}</b>개
         `;
     }
 
     /* =========================================================
-       4. 초경량 필터링 로직
+       4. 제작자 닉네임 추출 헬퍼 (안정성 보장)
+       ========================================================= */
+    function extractHandle(card) {
+        const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            const t = node.textContent.trim();
+            if (t.startsWith('@') && t.length > 1) {
+                return t.slice(1).toLowerCase();
+            }
+        }
+        return null;
+    }
+
+    /* =========================================================
+       5. 핵심 필터링 로직 (v9 개편)
        ========================================================= */
     function applyAll() {
-        // 데이터 준비
         const prefTagsList = config.preferTags.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
         const blockTagsList = config.blockedTags.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+        const blockCreatorsList = config.blockedCreators.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-        stats = { total: 0, hidden: 0, highlight: 0 };
+        stats = { total: 0, hidden: 0, masked: 0, highlight: 0 };
 
-        // 4-1. 배너 노출 여부 제어
+        // 5-1. 배너 노출 여부 제어 (안쪽 글씨, 슬라이더 래퍼 포함 완전 제거)
         const banners = document.querySelectorAll('.swiper-container, [class*="banner" i], [class*="swiper" i]');
         banners.forEach(b => {
             if (b.closest('#cd-panel, #cd-toggle-btn')) return;
-            b.style.display = config.hideBanner ? 'none' : '';
+            b.style.setProperty('display', config.hideBanner ? 'none' : '', 'important');
         });
 
-        // 4-2. 개별 캐릭터 카드 분석 (a태그 기반)
+        // 5-2. 개별 캐릭터 카드 분석
         const cards = document.querySelectorAll('a[href*="/character/"], a[href*="/characters/"]');
         
         cards.forEach(card => {
             if (card.closest('#cd-panel, #cd-toggle-btn')) return;
 
             const cardText = card.textContent.toLowerCase();
+            const creatorHandle = extractHandle(card);
             stats.total++;
 
-            // 스타일 및 상태 초기화
+            // 상태 초기화
             card.style.display = '';
-            card.classList.remove('cd-highlight-card');
+            card.classList.remove('cd-highlight-card', 'cd-tag-masked-card');
 
-            let isBlocked = false;
-
-            // (A) 차단할 태그 검색
-            if (blockTagsList.length > 0) {
-                isBlocked = blockTagsList.some(tag => cardText.includes(tag));
+            // (A) 제작자 완전 차단 필터링 (가장 먼저 수행)
+            let isCreatorBlocked = false;
+            if (creatorHandle && blockCreatorsList.includes(creatorHandle)) {
+                isCreatorBlocked = true;
             }
 
-            if (isBlocked) {
-                card.style.display = 'none';
+            if (isCreatorBlocked) {
+                card.style.setProperty('display', 'none', 'important');
                 stats.hidden++;
-                return; // 가려진 카드는 강조 연산을 생략하여 성능 향상
+                return; // 완전히 차단되었으면 이후 단계 생략
             }
 
-            // (B) 선호 태그 검색 및 강조 테두리 적용
+            // (B) 차단 태그 필터링 (연한 모자이크 블라인드 방식)
+            let isTagBlocked = false;
+            if (blockTagsList.length > 0) {
+                isTagBlocked = blockTagsList.some(tag => cardText.includes(tag));
+            }
+
+            if (isTagBlocked) {
+                card.classList.add('cd-tag-masked-card');
+                stats.masked++;
+                return; // 모자이크 대상인 카드도 선호 강조를 타지 않게 제어
+            }
+
+            // (C) 선호 태그 필터링 (노란 글로우 효과)
             let isPreferred = false;
             if (prefTagsList.length > 0) {
                 isPreferred = prefTagsList.some(tag => cardText.includes(tag));
@@ -260,13 +317,12 @@
     }
 
     /* =========================================================
-       5. DOM 변화 감지 (디바운스로 CPU 과부하 완벽 억제)
+       6. DOM 변화 감지 (디바운싱 최적화)
        ========================================================= */
     function startObserver() {
         const observer = new MutationObserver((mutations) => {
             let shouldUpdate = false;
             for (const m of mutations) {
-                // 자신이 추가한 매니저 UI로 인해 무한 루프 도는 것 방지
                 const el = m.target.nodeType === Node.ELEMENT_NODE ? m.target : m.target.parentElement;
                 if (el && el.closest('#cd-panel, #cd-toggle-btn, #cd-overlay')) continue;
                 
@@ -278,7 +334,7 @@
 
             if (shouldUpdate) {
                 if (updateTimeout) clearTimeout(updateTimeout);
-                updateTimeout = setTimeout(applyAll, 300); // 0.3초 대기 후 일괄 처리
+                updateTimeout = setTimeout(applyAll, 250); // 0.25초 디바운싱 적용
             }
         });
 
@@ -286,7 +342,7 @@
     }
 
     /* =========================================================
-       6. 초기화
+       7. 초기화
        ========================================================= */
     function init() {
         createUI();
