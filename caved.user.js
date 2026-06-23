@@ -2,7 +2,7 @@
 // @name         케이브덕 커스텀 매니저
 // @namespace    http://tampermonkey.net/
 // @version      10.0
-// @description  우측 고정 슬라이드 패널, 투명도 조절 블라인드, 탭 구분(메인/메모/채팅방/내정보), 맞춤형 메모 주입기 탑재
+// @description  우측 고정 4분할 슬라이드 설정 패널, 메인 배너 완전 제거, 프리미엄 노란색 글로우 강조, 보기 싫은 태그 반투명 50% 번짐 차단, 자동 출석체크, 채팅창 윙 및 첫대화 스크롤 유틸리티
 // @match        *://caveduck.io/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -30,7 +30,7 @@
         {
             id: 'preset-1',
             title: '대사 반복 금지 OOC',
-            content: 'OOC: PC의 대사나 행동을 또 앵무새마냥 언급하지마세요. PC의 모든 행위는 PC를 연기하는 사용자가 직접 서술합니다. NPC가 PC의 행동과 감정을 멋대로 왜곡하고 과대해석하지않습니다',
+            content: 'OOC: PC의 대사나 행동을 또 앵무새마냥 언급하지마세요. PC의 모든 행위는 PC를 연기하는 사용자가 직접 서술합니다. NPC가 PC의 행동 and 감정을 멋대로 왜곡하고 과대해석하지않습니다',
             date: '2026-03-01 22:56'
         },
         {
@@ -432,23 +432,11 @@
                 <!-- 3. 채팅방 탭 -->
                 <div id="cd-tab-chatroom" class="cd-tab-content">
                     <div class="cd-panel-header">채팅방 도구 및 유틸리티</div>
-                    <div class="cd-field">
-                        <label>글자 크기 조절</label>
-                        <select id="cd-chat-font-size" style="width:100%; border:1px solid #4a4a5a; background:#1e1e24; color:#fff; padding:10px; border-radius:8px;">
-                            <option value="default">기본 크기</option>
-                            <option value="15px">살짝 작게 (15px)</option>
-                            <option value="17px">조금 크게 (17px)</option>
-                            <option value="19px">아주 크게 (19px)</option>
-                        </select>
-                    </div>
-                    <div class="cd-field">
-                        <label>빠른 OOC 명령 템플릿</label>
-                        <small class="cd-help">클릭하면 즉시 클립보드에 복사됩니다.</small>
-                        <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
-                            <button class="cd-memo-action-btn" style="text-align:left; padding:10px;" onclick="navigator.clipboard.writeText('OOC: 행동 묘사를 더욱 상세하고 길게 묘사해주세요.')">1. 상세 묘사 지시 OOC</button>
-                            <button class="cd-memo-action-btn" style="text-align:left; padding:10px;" onclick="navigator.clipboard.writeText('OOC: 상황 전개를 건너뛰지 말고 천천히 대화 위주로 나누세요.')">2. 템포 늦추기 OOC</button>
-                            <button class="cd-memo-action-btn" style="text-align:left; padding:10px;" onclick="navigator.clipboard.writeText('OOC: 현재 장면의 공간 배경 및 인물 표정을 강조하세요.')">3. 연출 보강 OOC</button>
-                        </div>
+                    <div style="font-size:13px; color:#aaa; line-height:1.65;">
+                        <p><b>💬 채팅 유틸리티 버튼은 어디에 있나요?</b></p>
+                        <p>채팅방 하단의 '사진 추가' 버튼 옆을 확인해 주세요. <b>'내 보유 윙'</b> 뱃지와 <b>'첫대화로 가기'</b> 원클릭 스크롤 업 유틸리티 버튼이 항상 플로팅되어 보여집니다.</p>
+                        <p><b>🔄 첫대화로 가기 기능:</b></p>
+                        <p>대화를 삭제하지 않고 스크롤을 맨 위의 최초 대화 시작 지점으로 부드럽고 가볍게 올려줍니다.</p>
                     </div>
                 </div>
 
@@ -526,28 +514,6 @@
             panelOpacityText.innerText = `${val}%`;
             config.panelOpacity = parseInt(val);
             document.documentElement.style.setProperty('--cd-panel-opacity-val', (val / 100).toString());
-        });
-
-        // 폰트 크기 변경 실시간 제어
-        const fontSizeSelect = document.getElementById('cd-chat-font-size');
-        fontSizeSelect.addEventListener('change', (e) => {
-            const size = e.target.value;
-            const styleId = 'cd-font-override-style';
-            let styleEl = document.getElementById(styleId);
-            if (!styleEl) {
-                styleEl = document.createElement('style');
-                styleEl.id = styleId;
-                document.head.appendChild(styleEl);
-            }
-            if (size === 'default') {
-                styleEl.textContent = '';
-            } else {
-                styleEl.textContent = `
-                    div[class*="ChatMessage"], p[class*="Bubble"], div[class*="Bubble"], .cd-blur-target {
-                        font-size: ${size} !important;
-                    }
-                `;
-            }
         });
 
         function readDraft() {
@@ -661,7 +627,11 @@
                         <svg viewBox="0 0 24 24" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
                         입력창
                     </button>
-                    <button class="cd-memo-action-btn copy-clip" data-id="${memo.id}">
+                    <button class="cd-memo-action-btn copy-unote" data-id="${memo.id}">
+                        <svg viewBox="0 0 24 24" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"></path></svg>
+                        유저노트
+                    </button>
+                    <button class="cd-memo-action-btn copy-raw" data-id="${memo.id}">
                         <svg viewBox="0 0 24 24" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2 2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                         복사
                     </button>
@@ -699,8 +669,19 @@
             });
         });
 
+        // 유저노트 버튼 액션
+        container.querySelectorAll('.copy-unote').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = btn.getAttribute('data-id');
+                const memo = memos.find(m => m.id === id);
+                if (memo) {
+                    fallbackCopy(memo.content, '유저노트용 문구가 복사되었습니다!');
+                }
+            });
+        });
+
         // 복사 액션
-        container.querySelectorAll('.copy-clip').forEach(btn => {
+        container.querySelectorAll('.copy-raw').forEach(btn => {
             btn.addEventListener('click', () => {
                 const id = btn.getAttribute('data-id');
                 const memo = memos.find(m => m.id === id);
@@ -769,9 +750,6 @@
         `;
     }
 
-    /* =========================================================
-       4. 지능형 자동 출석체크 유틸리티 (매일 오전 9시 기준)
-       ========================================================= */
     function checkAttendance() {
         const statusEl = document.getElementById('cd-attendance-status');
         const lastEl = document.getElementById('cd-attendance-last');
@@ -850,10 +828,8 @@
         }, 500);
     }
 
-    /* =========================================================
-       5. 채팅방 윙(Wing) 잔액 조회 및 "첫대화 복구" 인젝션 유틸
-       ========================================================= */
     function injectChatroomUtility() {
+        // 하단 사진 추가 버튼이 있는 액세서리 바 탐색
         const accessoryBar = Array.from(document.querySelectorAll('div')).find(div => {
             return div.className.includes('flex') && div.querySelector('button') && div.textContent.includes('사진');
         });
@@ -868,49 +844,37 @@
         wrapper.className = 'cd-chat-utility-container';
         wrapper.style.cssText = 'display: inline-flex; align-items: center; gap: 8px; margin-left: 8px;';
 
-        // 5-1. 남은 윙 잔액 긁어와 표시하기
+        // 1. 남은 윙 잔액 표시하기 (실제 상점 등에서 긁어서 동기화)
         let cachedWings = GM_getValue('cd_cached_wings', '조회필요');
         const wingBadge = document.createElement('button');
         wingBadge.className = 'cd-chat-widget-btn';
         wingBadge.innerHTML = `💸 <span id="cd-chat-wings">${cachedWings}</span> 윙`;
         wingBadge.title = '포인트 상점/혜택 페이지 방문 시 실시간 동기화됩니다.';
         
-        // 윙 배지 클릭 시 혜택 페이지 이동 연동
         wingBadge.addEventListener('click', () => {
             window.open('https://caveduck.io/ko/earn', '_blank');
         });
 
-        // 5-2. 첫대화로 돌아가기 (Native Settings Reset Trigger)
+        // 2. 첫대화로 돌아가기 (물리적 스크롤 업 유틸리티)
         const resetBtn = document.createElement('button');
         resetBtn.className = 'cd-chat-widget-btn';
-        resetBtn.style.borderColor = '#ff4d4f';
         resetBtn.innerHTML = `🔄 첫대화로 돌아가기`;
-        resetBtn.title = '이 채팅방의 대화를 초기화하고 처음 장면으로 되돌아갑니다.';
+        resetBtn.title = '대화를 지우지 않고 가장 위에 있는 최초의 대화 시작 지점으로 부드럽게 올려줍니다.';
 
         resetBtn.addEventListener('click', () => {
-            // UI confirmation 모달 대체 설계 (Alert 차단 규칙 준수)
-            const confirmBox = document.createElement('div');
-            confirmBox.style.cssText = `
-                position: fixed; inset: 0; background: rgba(0,0,0,0.7);
-                display: flex; align-items: center; justify-content: center; z-index: 10000000;
-            `;
-            confirmBox.innerHTML = `
-                <div style="background:#1e1e24; border:1px solid #4a4a5a; border-radius:12px; padding:25px; text-align:center; max-width:320px; color:#fff;">
-                    <p style="font-weight:bold; margin-bottom:15px; font-size:14px; line-height:1.5;">대화 내용을 지우고 처음 장면으로 되돌아가시겠습니까?</p>
-                    <p style="font-size:12px; color:#999; margin-bottom:20px;">삭제된 대화는 복구할 수 없습니다.</p>
-                    <div style="display:flex; gap:10px;">
-                        <button id="cd-confirm-no" style="flex:1; padding:8px; border:none; border-radius:6px; background:#444; color:#fff; cursor:pointer;">취소</button>
-                        <button id="cd-confirm-yes" style="flex:1; padding:8px; border:none; border-radius:6px; background:#ff4d4f; color:#fff; font-weight:bold; cursor:pointer;">초기화</button>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(confirmBox);
-
-            confirmBox.querySelector('#cd-confirm-no').addEventListener('click', () => confirmBox.remove());
-            confirmBox.querySelector('#cd-confirm-yes').addEventListener('click', () => {
-                confirmBox.remove();
-                triggerNativeChatReset();
-            });
+            const scrollContainer = document.querySelector('div[class*="flex-col-reverse"][class*="overflow-y-auto"]');
+            if (scrollContainer) {
+                // 이노, 렉스 채팅 화면은 flex-col-reverse에 하위 flex-col을 둡니다.
+                const firstMsg = scrollContainer.querySelector('.flex.flex-col.p-4 > div:first-child');
+                if (firstMsg) {
+                    firstMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    showFeedbackMessage('가장 첫 대화 위치로 스크롤을 이동했습니다!');
+                } else {
+                    scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'smooth' });
+                }
+            } else {
+                showFeedbackMessage('채팅창 영역을 탐지하지 못했습니다.');
+            }
         });
 
         wrapper.appendChild(wingBadge);
@@ -925,35 +889,6 @@
         }
     }
 
-    // 네이티브 채팅 리셋을 자동으로 대행해주는 봇
-    function triggerNativeChatReset() {
-        showFeedbackMessage('대화 초기화를 시도합니다...');
-        // 1. 헤더 내부 설정 톱니바퀴 버튼 찾기
-        const gearIcon = document.querySelector('svg[class*="lucide-settings"], svg[class*="Settings"], button[class*="setting"]');
-        if (gearIcon) {
-            const gearBtn = gearIcon.closest('button') || gearIcon;
-            gearBtn.click();
-
-            // 2. 렌더링된 패널 내부의 '대화 설정' -> '초기화' 또는 '대화 초기화' 버튼 탐색
-            setTimeout(() => {
-                const resetTextNodes = Array.from(document.querySelectorAll('button, span, div'));
-                const nativeResetBtn = resetTextNodes.find(el => {
-                    const txt = el.textContent.trim();
-                    return txt === '대화 초기화' || txt === '초기화하기' || txt.includes('대화 초기화');
-                });
-
-                if (nativeResetBtn) {
-                    nativeResetBtn.click();
-                } else {
-                    // 상단의 3점 메뉴 혹은 사이드 메뉴를 직접 타격 시도
-                    showFeedbackMessage('기본 초기화 메뉴를 탐지하지 못했습니다. 상단 설정 톱니바퀴 메뉴를 직접 클릭해 주세요.');
-                }
-            }, 500);
-        } else {
-            showFeedbackMessage('설정 메뉴를 찾을 수 없습니다. 직접 상단의 톱니바퀴 버튼을 이용하여 초기화해 주세요.');
-        }
-    }
-
     // 윙 포인트 수집을 위한 전역 스크래핑 센서
     function scrapeUserWings() {
         const bodyText = document.body.textContent;
@@ -965,23 +900,20 @@
         }
     }
 
-    /* =========================================================
-       6. 핵심 필터링 로직 (v9.5 기반 개량)
-       ========================================================= */
     function applyAll() {
         const prefTagsList = config.preferTags.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
         const blockTagsList = config.blockedTags.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
         stats = { total: 0, masked: 0, highlight: 0 };
 
-        // 6-1. 배너 노출 제어 (글씨 및 레이아웃 통째로 영구 삭제)
+        // 5-1. 배너 노출 제어 (글씨 및 레이아웃 통째로 영구 삭제)
         const banners = document.querySelectorAll('.swiper-container, [class*="banner" i], [class*="swiper" i]');
         banners.forEach(b => {
             if (b.closest('#cd-panel, #cd-toggle-btn')) return;
             b.style.setProperty('display', config.hideBanner ? 'none' : '', 'important');
         });
 
-        // 6-2. 개별 캐릭터 카드 분석
+        // 5-2. 개별 캐릭터 카드 분석
         const cards = document.querySelectorAll('a[href*="/character/"], a[href*="/characters/"]');
         
         cards.forEach(card => {
@@ -1034,9 +966,6 @@
         updatePreview(stats);
     }
 
-    /* =========================================================
-       7. DOM 변화 감지 (디바운싱 최적화)
-       ========================================================= */
     function startObserver() {
         const observer = new MutationObserver((mutations) => {
             let shouldUpdate = false;
@@ -1063,9 +992,6 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    /* =========================================================
-       8. 초기화
-       ========================================================= */
     function init() {
         createUI();
         setTimeout(() => {
