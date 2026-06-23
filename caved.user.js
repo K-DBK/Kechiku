@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         케이브덕 커스텀 매니저 v9 (태그 블라인드 & 제작자 차단 & 프리미엄 디자인)
+// @name         케이브덕 커스텀 매니저
 // @namespace    http://tampermonkey.net/
-// @version      9.0
-// @description  우측 고정 슬라이드 패널, 대형 배너 완전 제거, 노란색 글로우 선호 태그 강조, 보기 싫은 태그 반투명 블라인드, 특정 제작자 완전 차단
+// @version      9.5
+// @description  우측 고정 슬라이드 패널, 대형 배너 완전 제거, 프리미엄 노란색 글로우 선호 태그 강조, 보기 싫은 태그 반투명 번짐(글씨 차단) 블라인드
 // @match        *://caveduck.io/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -14,18 +14,17 @@
     'use strict';
 
     /* =========================================================
-       1. 설정 및 상태 관리
+       1. 설정 및 상태 관리 (제작자 차단 기능 완전 제거)
        ========================================================= */
-    const CONFIG_KEY = 'caveduck_advanced_config_v9';
+    const CONFIG_KEY = 'caveduck_advanced_config_v9_5';
     const defaultConfig = {
         hideBanner: false,
         preferTags: '',       // 콤마 구분 - 매칭 시 노란색 부드러운 글로우 강조
-        blockedTags: '',      // 콤마 구분 - 매칭 시 완전히 없애지 않고 흐릿하게 블라인드
-        blockedCreators: ''   // 콤마 구분 - 매칭 시 카드 완전 삭제(display: none)
+        blockedTags: '',      // 콤마 구분 - 매칭 시 50% 투명도 + 글씨 특수 번짐 블라인드
     };
 
     let config = { ...defaultConfig, ...GM_getValue(CONFIG_KEY, {}) };
-    let stats = { total: 0, hidden: 0, masked: 0, highlight: 0 };
+    let stats = { total: 0, masked: 0, highlight: 0 };
     let updateTimeout = null;
 
     function saveConfig(patch) {
@@ -35,7 +34,7 @@
     }
 
     /* =========================================================
-       2. 스타일 주입 (디자인 전면 개선)
+       2. 스타일 주입 (디자인 및 가시성 대폭 보강)
        ========================================================= */
     GM_addStyle(`
         /* 우측 중앙 고정 설정 버튼 */
@@ -77,13 +76,15 @@
         
         .cd-field { margin-bottom: 16px; }
         .cd-field label { display: block; font-size: 12.5px; color: #ccc; margin-bottom: 6px; font-weight: bold; }
+        
+        /* [개선] 노란색 입력 칸 가시성 대폭 상향 (조금 더 밝고 테두리가 뚜렷함) */
         .cd-field input[type="text"] {
-            width: 100%; box-sizing: border-box; padding: 9px 12px;
-            background: #1a1a22; color: #fff; border: 1px solid #3e3e4f; border-radius: 8px;
+            width: 100%; box-sizing: border-box; padding: 10px 12px;
+            background: #22222b; color: #fff; border: 1px solid #4e4e5f; border-radius: 8px;
             font-size: 13px; outline: none; transition: all 0.2s;
         }
-        .cd-field input[type="text"]:focus { border-color: #FFD700; box-shadow: 0 0 8px rgba(255, 215, 0, 0.2); }
-        .cd-help { font-size: 11px; color: #888; margin-top: 5px; display: block; line-height: 1.45; }
+        .cd-field input[type="text"]:focus { border-color: #FFD700; box-shadow: 0 0 8px rgba(255, 215, 0, 0.3); }
+        .cd-help { font-size: 11px; color: #999; margin-top: 5px; display: block; line-height: 1.45; }
 
         /* 실시간 통계 박스 */
         #cd-preview-box {
@@ -101,29 +102,57 @@
         .cd-btn-save { background: #FFD700; color: #111; }
         .cd-btn-close { background: #2d2d3a; color: #eee; }
 
-        /* [개선] 선호 태그 매칭 시 - 고급스러운 노란색 그라데이션 글로우 & 곡선 테두리 */
+        /* [개선] 선호 태그 매칭 시 - 은은한 노란빛 배경을 추가하여 아주 잘 보이게 디자인 개선 */
         .cd-highlight-card {
-            outline: 2px solid #FFD700 !important;
+            background: rgba(255, 215, 0, 0.08) !important; /* 노란색 칸이 살짝 밝고 영롱하게 깔림 */
+            outline: 2.5px solid #FFD700 !important;
             outline-offset: 1px !important;
-            box-shadow: 0 0 15px rgba(255, 215, 0, 0.35) !important;
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.45) !important;
             border-radius: 16px !important;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
         }
         .cd-highlight-card:hover {
-            box-shadow: 0 0 22px rgba(255, 215, 0, 0.55) !important;
+            background: rgba(255, 215, 0, 0.12) !important;
+            box-shadow: 0 0 26px rgba(255, 215, 0, 0.6) !important;
             transform: scale(1.02);
         }
 
-        /* [수정] 차단 태그 매칭 시 - 완전 블라인드 대신 투명화 및 모자이크(계정은 보임) */
+        /* [수정] 차단 태그 매칭 시 - 투명도 50% 변경 및 특수 번짐 효과 적용 */
         .cd-tag-masked-card {
-            opacity: 0.18 !important;
-            filter: blur(4px) grayscale(70%) !important;
-            pointer-events: auto !important; /* 마우스 오버 감지 허용 */
+            opacity: 0.50 !important; /* 요청하신 50% 투명도 적용 */
+            background: rgba(15, 15, 20, 0.75) !important;
+            box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.9) !important;
+            border-radius: 14px !important;
+            pointer-events: auto !important;
             transition: all 0.35s ease !important;
         }
+        
+        /* 이미지 모자이크 강화 */
+        .cd-tag-masked-card img {
+            filter: blur(16px) grayscale(50%) !important;
+            transition: filter 0.3s ease !important;
+        }
+
+        /* [핵심] 글씨 번짐(Glow) 효과 - 원본 글자를 완전히 숨기고 번지게 만듦 */
+        .cd-tag-masked-card .cd-blur-target {
+            color: transparent !important;
+            text-shadow: 0 0 9px rgba(230, 230, 235, 0.95) !important; /* 완전하고 몽환적인 번짐 */
+            user-select: none;
+            transition: all 0.3s ease !important;
+        }
+
+        /* 마우스 오버 시 일시 해제 */
         .cd-tag-masked-card:hover {
-            opacity: 0.65 !important;
-            filter: blur(1px) grayscale(10%) !important; /* 마우스 올렸을 때만 대략 확인 가능 */
+            opacity: 0.95 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+        .cd-tag-masked-card:hover img {
+            filter: none !important;
+        }
+        .cd-tag-masked-card:hover .cd-blur-target {
+            color: inherit !important;
+            text-shadow: none !important;
         }
     `);
 
@@ -144,7 +173,7 @@
         const panel = document.createElement('div');
         panel.id = 'cd-panel';
         panel.innerHTML = `
-            <h2>🦆 케이브덕 매니저 (v9)</h2>
+            <h2>🦆 케이브덕 매니저</h2>
 
             <h3>1. 레이아웃 설정</h3>
             <div class="cd-row">
@@ -152,25 +181,18 @@
                 <label for="cd-hideBanner">메인 상단 대형 배너 숨기기</label>
             </div>
 
-            <h3>2. 선호 태그 강조 (디자인 개선)</h3>
+            <h3>2. 선호 태그 강조 (디자인 대폭 보강)</h3>
             <div class="cd-field">
                 <label>강조할 선호 태그/단어 (콤마로 구분)</label>
                 <input type="text" id="cd-preferTags" value="${config.preferTags}" placeholder="예: 순애, 집착, 판타지">
-                <span class="cd-help">카드나 태그에 매칭되면 <b>부드러운 곡선 테두리와 황금빛 글로우 효과</b>로 예쁘게 강조됩니다.</span>
+                <span class="cd-help">카드나 태그에 매칭되면 <b>부드러운 노란색 배경 강조와 황금빛 글로우 효과</b>로 아주 화사하게 표시됩니다.</span>
             </div>
 
             <h3>3. 보기 싫은 태그 블라인드</h3>
             <div class="cd-field">
                 <label>블라인드 처리할 태그/단어 (콤마로 구분)</label>
                 <input type="text" id="cd-blockedTags" value="${config.blockedTags}" placeholder="예: 공포, 고어, BL">
-                <span class="cd-help">완전히 사라지지는 않고 <b>연한 모자이크 형태(반투명)</b>로 보이게 조절합니다. (계정/형태 확인 가능)</span>
-            </div>
-
-            <h3>4. 제작자 아예 차단</h3>
-            <div class="cd-field">
-                <label>완전히 차단할 제작자 (@ 제외, 콤마로 구분)</label>
-                <input type="text" id="cd-blockedCreators" value="${config.blockedCreators}" placeholder="예: dream_core, Nae">
-                <span class="cd-help">이곳에 작성된 제작자의 캐릭터 카드는 화면에서 흔적도 없이 완전히 숨겨집니다.</span>
+                <span class="cd-help">카드가 완전히 사라지지 않고 <b>투명도 50% 및 텍스트 번짐(Glow) 효과</b>를 활용하여 계정 및 실루엣만 연하게 보이게 만듭니다. (마우스 오버 시 일시 해제)</span>
             </div>
 
             <h3>📊 실시간 필터 미리보기</h3>
@@ -198,8 +220,7 @@
             return {
                 hideBanner: panel.querySelector('#cd-hideBanner').checked,
                 preferTags: panel.querySelector('#cd-preferTags').value,
-                blockedTags: panel.querySelector('#cd-blockedTags').value,
-                blockedCreators: panel.querySelector('#cd-blockedCreators').value
+                blockedTags: panel.querySelector('#cd-blockedTags').value
             };
         }
 
@@ -225,71 +246,42 @@
         if (!box) return;
         box.innerHTML = `
             현재 페이지 캐릭터 카드: <b>${stats.total}</b>개<br>
-            제작자 차단으로 숨김: <b style="color:#FF5A5F">${stats.hidden}</b>개<br>
-            태그 필터 연한 블라인드: <b style="color:#4facfe">${stats.masked}</b>개<br>
+            태그 필터 연한 블라인드(50%): <b style="color:#4facfe">${stats.masked}</b>개<br>
             선호 태그 매칭(황금 글로우): <b style="color:#FFD700">${stats.highlight}</b>개
         `;
     }
 
     /* =========================================================
-       4. 제작자 닉네임 추출 헬퍼 (안정성 보장)
-       ========================================================= */
-    function extractHandle(card) {
-        const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
-        let node;
-        while ((node = walker.nextNode())) {
-            const t = node.textContent.trim();
-            if (t.startsWith('@') && t.length > 1) {
-                return t.slice(1).toLowerCase();
-            }
-        }
-        return null;
-    }
-
-    /* =========================================================
-       5. 핵심 필터링 로직 (v9 개편)
+       4. 핵심 필터링 로직
        ========================================================= */
     function applyAll() {
         const prefTagsList = config.preferTags.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
         const blockTagsList = config.blockedTags.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-        const blockCreatorsList = config.blockedCreators.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-        stats = { total: 0, hidden: 0, masked: 0, highlight: 0 };
+        stats = { total: 0, masked: 0, highlight: 0 };
 
-        // 5-1. 배너 노출 여부 제어 (안쪽 글씨, 슬라이더 래퍼 포함 완전 제거)
+        // 4-1. 배너 노출 여부 제어 (안쪽 글씨, 슬라이더 래퍼 포함 완전 제거)
         const banners = document.querySelectorAll('.swiper-container, [class*="banner" i], [class*="swiper" i]');
         banners.forEach(b => {
             if (b.closest('#cd-panel, #cd-toggle-btn')) return;
             b.style.setProperty('display', config.hideBanner ? 'none' : '', 'important');
         });
 
-        // 5-2. 개별 캐릭터 카드 분석
+        // 4-2. 개별 캐릭터 카드 분석
         const cards = document.querySelectorAll('a[href*="/character/"], a[href*="/characters/"]');
         
         cards.forEach(card => {
             if (card.closest('#cd-panel, #cd-toggle-btn')) return;
 
             const cardText = card.textContent.toLowerCase();
-            const creatorHandle = extractHandle(card);
             stats.total++;
 
             // 상태 초기화
             card.style.display = '';
             card.classList.remove('cd-highlight-card', 'cd-tag-masked-card');
+            card.querySelectorAll('.cd-blur-target').forEach(el => el.classList.remove('cd-blur-target'));
 
-            // (A) 제작자 완전 차단 필터링 (가장 먼저 수행)
-            let isCreatorBlocked = false;
-            if (creatorHandle && blockCreatorsList.includes(creatorHandle)) {
-                isCreatorBlocked = true;
-            }
-
-            if (isCreatorBlocked) {
-                card.style.setProperty('display', 'none', 'important');
-                stats.hidden++;
-                return; // 완전히 차단되었으면 이후 단계 생략
-            }
-
-            // (B) 차단 태그 필터링 (연한 모자이크 블라인드 방식)
+            // (A) 차단 태그 필터링 (연한 모자이크 블라인드 및 텍스트 번짐 적용)
             let isTagBlocked = false;
             if (blockTagsList.length > 0) {
                 isTagBlocked = blockTagsList.some(tag => cardText.includes(tag));
@@ -297,11 +289,23 @@
 
             if (isTagBlocked) {
                 card.classList.add('cd-tag-masked-card');
+                
+                // 계정(@) 텍스트 노드를 제외한 모든 말단 텍스트 요소에 번짐 효과 클래스 부여
+                const allElements = card.querySelectorAll('*');
+                allElements.forEach(el => {
+                    if (el.children.length === 0 && el.textContent.trim()) {
+                        // 계정명(@)이 아닌 일반 카드 설명 및 제목 텍스트만 번지게 만듭니다.
+                        if (!el.textContent.includes('@')) {
+                            el.classList.add('cd-blur-target');
+                        }
+                    }
+                });
+
                 stats.masked++;
-                return; // 모자이크 대상인 카드도 선호 강조를 타지 않게 제어
+                return; // 모자이크 상태인 경우 선호 노란색 강조와 중복 적용을 피해 시각적 간섭을 막음
             }
 
-            // (C) 선호 태그 필터링 (노란 글로우 효과)
+            // (B) 선호 태그 필터링 (황금 글로우 및 배경강조 효과)
             let isPreferred = false;
             if (prefTagsList.length > 0) {
                 isPreferred = prefTagsList.some(tag => cardText.includes(tag));
@@ -317,7 +321,7 @@
     }
 
     /* =========================================================
-       6. DOM 변화 감지 (디바운싱 최적화)
+       5. DOM 변화 감지 (디바운싱 최적화)
        ========================================================= */
     function startObserver() {
         const observer = new MutationObserver((mutations) => {
@@ -342,7 +346,7 @@
     }
 
     /* =========================================================
-       7. 초기화
+       6. 초기화
        ========================================================= */
     function init() {
         createUI();
