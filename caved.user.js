@@ -21,7 +21,7 @@
         hideBanner: false,
         preferTags: '',       // 콤마 구분 - 매칭 시 노란색 부드러운 강조
         blockedTags: '',      // 콤마 구분 - 매칭 시 투명도 조절 + 번짐 차단
-        blockedOpacity: 40,   // 블라인드 반투명도 기본값 (40%)
+        blockedOpacity: 50,   // 블라인드 반투명도 기본값 (50%)
         panelOpacity: 95      // 커스텀 매니저 창 투명도 기본값 (95%)
     };
 
@@ -124,7 +124,7 @@
         .cd-tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
         .cd-tab-btn.active { color: #FFD700; background: rgba(255,215,0,0.08); }
 
-        /* 설정 콘텐츠 표시 영역 (우측 영역) */
+        /* 설정 설정 및 메모 표시 영역 (우측 영역) */
         #cd-panel-body {
             margin-left: 75px; height: 100%; display: flex; flex-direction: column; box-sizing: border-box;
         }
@@ -249,7 +249,7 @@
 
         /* 차단 태그 매칭 카드 (투명도는 변수로 조작) */
         .cd-tag-masked-card {
-            opacity: var(--cd-blocked-opacity, 0.4) !important;
+            opacity: var(--cd-blocked-opacity, 0.5) !important;
             background: rgba(15, 15, 20, 0.75) !important;
             box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.9) !important;
             border-radius: 14px !important;
@@ -995,7 +995,7 @@
             card.classList.remove('cd-highlight-card', 'cd-tag-masked-card');
             card.querySelectorAll('.cd-blur-target').forEach(el => el.classList.remove('cd-blur-target'));
 
-            // (A) 차단 태그 필터링 (반투명화 및 글씨 번짐(Glow) 효과 입히기)
+            // (A) 차단 태그 필터링 (반투명도 50% 및 텍스트 번짐(Glow) 효과 입히기)
             let isTagBlocked = false;
             if (blockTagsList.length > 0) {
                 // 내장된 사전 목록 또는 텍스트 검색 둘 다 탐지
