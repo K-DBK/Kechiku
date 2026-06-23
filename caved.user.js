@@ -220,36 +220,60 @@
 
         stats = { total: 0, hidden: 0, masked: 0, highlight: 0 };
 
-        // 4-1. 전체 섹션(칸) 숨기기 (텍스트 기반 탐색으로 정확도 상승)
-        const allHeaders = document.querySelectorAll('h1, h2, h3, div');
-        allHeaders.forEach(el => {
-            const text = el.textContent.trim();
-            if (!text) return;
+        // 4-1. 전체 섹션(칸) 숨기기 (XPath 기반 초강력 섹션 파괴)
+        function hideSectionContainer(keyword) {
+            try {
+                // 문서 전체에서 해당 키워드가 포함된 텍스트 노드를 정확히 탐색
+                const elements = document.evaluate(
+                    `.//*[contains(text(), '${keyword}')]`,
+                    document.body,
+                    null,
+                    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                    null
+                );
 
-            let shouldHide = false;
-            if (config.hideOfficial && text.includes('자랑스러운 공식 크리에이터')) shouldHide = true;
-            if (config.hidePopular && text.includes('지금 인기있는 캐릭터')) shouldHide = true;
-            if (config.hideWorld && text.includes('세계관')) shouldHide = true;
+                for (let i = 0; i < elements.snapshotLength; i++) {
+                    let el = elements.snapshotItem(i);
+                    if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
 
-            if (shouldHide) {
-                // 부모 컨테이너(섹션 래퍼) 찾기. 보통 2~4단계 위에 있음.
-                let parent = el.parentElement;
-                let foundSection = false;
-                for(let i=0; i<5; i++) {
-                    if (parent && parent.tagName !== 'MAIN' && parent.tagName !== 'BODY') {
-                        // Tailwind 클래스 중 섹션을 나누는 여백 클래스가 있는지 확인
-                        if (parent.className.includes('mb-') || parent.className.includes('mt-') || parent.tagName === 'SECTION') {
-                            parent.style.display = 'none';
-                            foundSection = true;
-                            break;
+                    // 해당 엘리먼트가 직접 키워드 텍스트를 가지고 있는지 확인 (엉뚱한 부모가 지워지는 것 방지)
+                    let hasDirectText = Array.from(el.childNodes).some(node => 
+                        node.nodeType === Node.TEXT_NODE && node.nodeValue.includes(keyword)
+                    );
+                    if (!hasDirectText) continue;
+
+                    // 글씨를 찾았으면 부모를 타고 올라가며 캐릭터 목록(swiper)을 포함하는 거대한 컨테이너를 찾음
+                    let parent = el.parentElement;
+                    let targetToHide = el.parentElement; 
+                    
+                    for (let j = 0; j < 8; j++) { // 최대 8단계 상위 박스까지 추적
+                        if (!parent || parent.tagName === 'MAIN' || parent.tagName === 'BODY') break;
+                        
+                        // 케이브덕 섹션의 특징: 'swiper'(슬라이드)를 포함하거나 큰 여백(mb-) 클래스가 있음
+                        if (parent.innerHTML.includes('swiper') || parent.className.includes('mb-') || parent.className.includes('py-')) {
+                            targetToHide = parent;
                         }
                         parent = parent.parentElement;
                     }
+                    
+                    // 찾아낸 거대 래퍼 박스를 강제로 숨김 처리 (절대 뚫리지 않도록 important 속성 부여)
+                    if (targetToHide) {
+                        targetToHide.style.setProperty('display', 'none', 'important');
+                        targetToHide.style.setProperty('height', '0px', 'important');
+                        targetToHide.style.setProperty('overflow', 'hidden', 'important');
+                        targetToHide.style.setProperty('margin', '0', 'important');
+                        targetToHide.style.setProperty('padding', '0', 'important');
+                    }
                 }
-                // 만약 못찾았으면 바로 위 부모라도 숨김
-                if(!foundSection && el.parentElement) el.parentElement.style.display = 'none';
+            } catch (e) {
+                console.error("섹션 숨기기 에러:", e);
             }
-        });
+        }
+
+        // 혹시 사이트에서 텍스트가 살짝 바뀔 것을 대비해 일부 핵심 단어만으로 추적
+        if (config.hideOfficial) hideSectionContainer('공식 크리에이터');
+        if (config.hidePopular) hideSectionContainer('인기있는');
+        if (config.hideWorld) hideSectionContainer('세계관');
 
         // 배너 숨기기 (보통 최상단 스와이퍼나 큰 이미지 래퍼)
         if (config.hideBanner) {
