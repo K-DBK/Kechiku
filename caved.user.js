@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         케이브덕 커스텀 매니저
 // @namespace    http://tampermonkey.net/
-// @version      11.0
-// @description  우측 고정 4분할 슬라이드 설정 패널, 메인 배너 완전 제거, 태그/제작자 분리 필터링(제목·태그·소개란 기반), 필터 매칭 시각화 뱃지, 자동 출석체크, React 대응 채팅 입력 주입, 첫대화 플로팅 버튼, 윙 잔액 실시간 표기
+// @version      12.0
+// @description  우측 고정 4분할 슬라이드 설정 패널, 메인 배너 완전 제거, 제목/소개·제작자 분리 필터링(실제 DOM 구조 기반), 필터 매칭 시각화 뱃지, 자동 출석체크, React 대응 채팅 입력 주입, 첫대화 플로팅 버튼, 윙 잔액 실시간 표기
 // @match        *://caveduck.io/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -19,8 +19,8 @@
     // 기본 설정값 (배너 숨기기, 선호 태그, 차단 태그, 투명도 조절)
     const defaultConfig = {
         hideBanner: false,
-        preferTags: '',       // 콤마 구분 - 매칭 시 노란색 부드러운 강조 (제목/태그/소개란만 검사)
-        blockedTags: '',      // 콤마 구분 - 매칭 시 투명도 조절 + 번짐 차단 (제목/태그/소개란만 검사)
+        preferTags: '',       // 콤마 구분 - 매칭 시 노란색 부드러운 강조 (카드의 제목/소개란만 검사, 제작자명 제외)
+        blockedTags: '',      // 콤마 구분 - 매칭 시 투명도 조절 + 번짐 차단 (카드의 제목/소개란만 검사, 제작자명 제외)
         blockedCreators: '',  // 콤마 구분 - 제작자명/슬러그 매칭 시 카드 자체를 완전 비표시
         blockedOpacity: 50,   // 블라인드 반투명도 기본값 (50%)
         panelOpacity: 95,     // 커스텀 매니저 창 투명도 기본값 (95%)
@@ -67,42 +67,36 @@
         "도미넌트", "마조히스트", "새디스트", "서브미시브", "서큐버스", "인큐버스", "후타나리", "벌레", "촉수"
     ];
 
-    // 카드 안에서 "제작자명/슬러그" 영역과 "본문(제목·태그·소개)" 영역을 분리해서 텍스트를 추출.
-    // 카브덕 카드 구조상 제작자 표기는 보통 '@슬러그' 형태나 마지막 줄의 작은 글씨로 노출되므로,
-    // href 안에 있는 @ 텍스트, 혹은 "@"로 시작하는 텍스트 노드를 제작자 영역으로 간주하고 본문에서 제외한다.
+    // 카드 안에서 "제작자명" 영역과 "본문(제목·소개)" 영역을 분리해서 텍스트를 추출.
+    // 실제 카드 구조(2026-06 기준):
+    //   제목   -> div.truncate.leading-tight.font-bold
+    //   소개   -> div.text-dgray-400.truncate.text-xs
+    //   제작자 -> span.text-official-creator (예: "@WH2TEPEACH")
+    // 카드 목록 화면에는 태그 칩이 별도로 렌더링되지 않으므로, "본문"은 제목+소개로 한정한다.
     function splitCardText(card) {
-        const allTextNodes = [];
-        const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null);
-        let node;
-        while ((node = walker.nextNode())) {
-            const t = node.textContent.trim();
-            if (t) allTextNodes.push({ node, text: t });
-        }
+        const titleEl = card.querySelector('.truncate.leading-tight.font-bold');
+        const descEl = card.querySelector('.text-dgray-400.truncate.text-xs');
+        const creatorEl = card.querySelector('.text-official-creator');
 
-        let creatorText = '';
-        let bodyText = '';
+        const bodyText = [titleEl, descEl]
+            .filter(Boolean)
+            .map(el => el.textContent.trim())
+            .join(' ')
+            .toLowerCase();
 
-        allTextNodes.forEach(({ node, text }) => {
-            // '@'로 시작하거나 '@'를 포함한 짧은 슬러그성 텍스트는 제작자 표기로 간주
-            const looksLikeCreatorTag = /^@/.test(text) || (text.includes('@') && text.length <= 40);
-            if (looksLikeCreatorTag) {
-                creatorText += ' ' + text;
-            } else {
-                bodyText += ' ' + text;
-            }
-        });
+        const creatorText = creatorEl ? creatorEl.textContent.trim().toLowerCase() : '';
 
-        return {
-            creator: creatorText.toLowerCase(),
-            body: bodyText.toLowerCase()
-        };
+        return { creator: creatorText, body: bodyText };
     }
 
-    // 카드 하단에 "어떤 필터에 의해 강조/차단되었는지" 보여주는 작은 뱃지를 부착
+    // 카드 하단(썸네일 이미지 영역)에 "어떤 필터에 의해 강조/차단되었는지" 보여주는 작은 뱃지를 부착.
+    // 썸네일 컨테이너(.relative.aspect-[4/5])가 이미 position:relative이므로 그 안에 붙인다.
     function attachFilterBadge(card, type, matchedTerms) {
         let badge = card.querySelector('.cd-filter-badge');
         if (badge) badge.remove();
         if (!matchedTerms || matchedTerms.length === 0) return;
+
+        const thumb = card.querySelector('.relative.aspect-\\[4\\/5\\]') || card.querySelector('[class*="aspect-"]') || card;
 
         badge = document.createElement('div');
         badge.className = 'cd-filter-badge ' + (type === 'highlight' ? 'cd-filter-badge-highlight' : type === 'blocked-tag' ? 'cd-filter-badge-blocked' : 'cd-filter-badge-creator');
@@ -110,12 +104,11 @@
         const label = type === 'highlight' ? '강조' : type === 'blocked-tag' ? '태그차단' : '제작자차단';
         badge.innerText = `${label}: ${matchedTerms.join(', ')}`;
 
-        // position relative 보장 (카드 자체가 a 태그라 보통 relative 필요)
-        const computedPos = window.getComputedStyle(card).position;
+        const computedPos = window.getComputedStyle(thumb).position;
         if (computedPos === 'static') {
-            card.style.position = 'relative';
+            thumb.style.position = 'relative';
         }
-        card.appendChild(badge);
+        thumb.appendChild(badge);
     }
     function saveConfig(patch) {
         config = { ...config, ...patch };
@@ -459,14 +452,14 @@
                     <div class="cd-field">
                         <label>강조할 선호 태그/단어 (콤마로 구분)</label>
                         <input type="text" id="cd-preferTags" value="${config.preferTags}" placeholder="예: 순애, 집착, 오리지널 캐릭터">
-                        <span class="cd-help">카드나 태그에 매칭되면 <b>부드러운 노란색 배경 강조와 글로우 효과</b>로 정갈하게 표시됩니다.</span>
+                        <span class="cd-help">챗봇의 <b>제목과 소개란</b>에서 매칭되면 <b>부드러운 노란색 배경 강조와 글로우 효과</b>로 정갈하게 표시됩니다 (제작자명은 검사하지 않음).</span>
                     </div>
 
                     <div class="cd-section-title">보기 싫은 태그 블라인드</div>
                     <div class="cd-field">
                         <label>블라인드 처리할 태그/단어 (콤마로 구분)</label>
                         <input type="text" id="cd-blockedTags" value="${config.blockedTags}" placeholder="예: 공포, 고어, BL, NTR">
-                        <span class="cd-help">챗봇의 <b>제목, 태그, 소개란</b>에서만 검사합니다 (제작자명/슬러그는 검사하지 않음). 매칭되면 카드가 사라지지 않고 반투명도 설정에 따라 형태만 연하게 보이고 글씨는 흐려집니다.</span>
+                        <span class="cd-help">챗봇의 <b>제목과 소개란</b>에서만 검사합니다 (제작자명은 검사하지 않음). 매칭되면 카드가 사라지지 않고 반투명도 설정에 따라 형태만 연하게 보이고 글씨는 흐려집니다.</span>
                     </div>
 
                     <div class="cd-section-title">제작자 차단</div>
@@ -770,7 +763,7 @@
                 const id = btn.getAttribute('data-id');
                 const memo = memos.find(m => m.id === id);
                 if (memo) {
-                    const chatInput = document.querySelector('textarea[placeholder*="입력"], textarea[placeholder*="대사"], textarea[placeholder*="message"], textarea');
+                    const chatInput = document.querySelector('textarea[name="userInput"]');
                     if (chatInput) {
                         injectTextIntoReactInput(chatInput, memo.content);
                         showFeedbackMessage('채팅창 입력칸에 문구를 주입했습니다!');
@@ -962,24 +955,30 @@
     }
 
     function injectWingAndScrollWidgets() {
-        // 하단 사진 추가 버튼이 있는 액세서리 바 탐색
-        const accessoryBar = Array.from(document.querySelectorAll('div')).find(div => {
-            return div.className.includes('flex') && div.querySelector('button') && div.textContent.includes('사진');
-        });
+        // 채팅 입력창(textarea[name="userInput"])을 기준으로 form 내부의 좌측 버튼 그룹을 탐색.
+        // "사진 추가"는 <button>이 아니라 <div>(file input을 감싼 래퍼)이므로 div 기준으로 찾아야 함.
+        const chatInput = document.querySelector('textarea[name="userInput"]');
+        if (!chatInput) return;
 
+        const form = chatInput.closest('form');
+        if (!form) return;
+
+        // order-first 클래스가 붙은, 모델 선택/메모리/사진추가 버튼들이 모여있는 좌측 그룹
+        const accessoryBar = form.querySelector('.order-first');
         if (!accessoryBar) return;
 
         // 중복 추가 처리 방지용 가드
         if (accessoryBar.querySelector('.cd-chat-utility-container')) return;
 
-        // 우측 하단에 Custom UI 공간 마련을 위한 래퍼 추가
+        // 윙 뱃지 래퍼 생성
         const wrapper = document.createElement('div');
         wrapper.className = 'cd-chat-utility-container';
-        wrapper.style.cssText = 'display: inline-flex; align-items: center; gap: 8px; margin-left: 8px;';
+        wrapper.style.cssText = 'display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0;';
 
         // 남은 윙 잔액 표시하기 (실제 상점 등에서 긁어서 동기화) - 표시 여부는 설정으로 토글
         let cachedWings = GM_getValue('cd_cached_wings', '조회필요');
         const wingBadge = document.createElement('button');
+        wingBadge.type = 'button';
         wingBadge.className = 'cd-chat-widget-btn cd-wing-badge';
         wingBadge.innerHTML = `💸 <span id="cd-chat-wings">${cachedWings}</span> 윙`;
         wingBadge.title = '포인트 상점/혜택 페이지 방문 시 실시간 동기화됩니다.';
@@ -991,8 +990,8 @@
 
         wrapper.appendChild(wingBadge);
 
-        // 악세서리바의 "사진 추가" 버튼 근처에 주입
-        const photoBtn = Array.from(accessoryBar.querySelectorAll('button')).find(btn => btn.textContent.includes('사진'));
+        // "사진 추가" div 바로 뒤에 윙 뱃지를 삽입. 못 찾으면 액세서리 바 맨 끝에 추가.
+        const photoBtn = Array.from(accessoryBar.children).find(el => el.textContent.includes('사진'));
         if (photoBtn) {
             photoBtn.parentNode.insertBefore(wrapper, photoBtn.nextSibling);
         } else {
@@ -1001,9 +1000,9 @@
     }
 
     // "첫대화로 가기"를 크랙 플랫폼 스타일처럼 화면 우측 하단에 절대좌표로 고정된
-    // 독립 플로팅 버튼으로 배치 (기존: 입력창 옆 인라인 버튼 -> 변경: 채팅 영역 위에 떠있는 원형 버튼)
+    // 독립 플로팅 버튼으로 배치. 케이브덕 자체 UI에도 위/아래 스크롤 버튼이
+    // (.absolute.-top-28.right-4 영역) 있지만, 요청에 따라 별도 버튼을 추가로 띄운다.
     function injectFloatingScrollTopButton() {
-        // 채팅 메시지 스크롤 컨테이너가 화면에 있을 때만 의미가 있으므로 먼저 확인
         const scrollContainer = document.querySelector('div[class*="flex-col-reverse"][class*="overflow-y-auto"]');
         if (!scrollContainer) {
             // 채팅방이 아니면 기존에 떠있던 버튼은 제거
@@ -1019,6 +1018,7 @@
         floatWrap.className = 'cd-floating-scroll-wrap';
 
         const resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
         resetBtn.className = 'cd-floating-scroll-btn';
         resetBtn.title = '대화를 지우지 않고 가장 위에 있는 최초의 대화 시작 지점으로 부드럽게 올려줍니다.';
         resetBtn.innerHTML = `
@@ -1029,20 +1029,35 @@
         `;
 
         resetBtn.addEventListener('click', () => {
-            const container = document.querySelector('div[class*="flex-col-reverse"][class*="overflow-y-auto"]');
-            if (container) {
-                const firstMsg = container.querySelector('.flex.flex-col.p-4 > div:first-child');
-                if (firstMsg) {
-                    firstMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    showFeedbackMessage('가장 첫 대화 위치로 스크롤을 이동했습니다!');
-                } else {
-                    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-                }
-            }
+            scrollToFirstMessage();
         });
 
         floatWrap.appendChild(resetBtn);
         document.body.appendChild(floatWrap);
+    }
+
+    // 스크롤 컨테이너 안의 .flex.flex-col.p-4 안에는 "이 대화는 AI로..." 안내 <p>가
+    // 먼저 나오고, 그 다음 첫 메시지가 <div id="chat-message-...">로 나온다.
+    // 따라서 단순 :first-child가 아니라 "안내문 다음에 나오는 첫 번째 chat-message div"를 찾아야 한다.
+    function scrollToFirstMessage() {
+        const container = document.querySelector('div[class*="flex-col-reverse"][class*="overflow-y-auto"]');
+        if (!container) {
+            showFeedbackMessage('채팅창 영역을 탐지하지 못했습니다.');
+            return;
+        }
+
+        const messageList = container.querySelector(':scope > div.flex.flex-col.p-4') || container.querySelector('.flex.flex-col.p-4');
+        const firstMsg = messageList
+            ? Array.from(messageList.children).find(el => el.id && el.id.startsWith('chat-message-'))
+            : null;
+
+        if (firstMsg) {
+            firstMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            showFeedbackMessage('가장 첫 대화 위치로 스크롤을 이동했습니다!');
+        } else {
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+            showFeedbackMessage('첫 메시지를 찾지 못해 맨 위로 이동했습니다.');
+        }
     }
 
     // 윙 포인트 수집을 위한 전역 스크래핑 센서
@@ -1121,14 +1136,11 @@
             if (isTagBlocked) {
                 card.classList.add('cd-tag-masked-card');
 
-                // 제작자명(@ 포함 텍스트)을 제외한 본문 텍스트 노드에 cd-blur-target 지정
-                const allElements = card.querySelectorAll('*');
-                allElements.forEach(el => {
-                    if (el.children.length === 0 && el.textContent.trim()) {
-                        if (!el.textContent.includes('@')) {
-                            el.classList.add('cd-blur-target');
-                        }
-                    }
+                // 블러 대상은 "본문(제목/소개)" 요소로만 한정. 제작자 표기 라인은 절대 건드리지 않음.
+                const titleEl = card.querySelector('.truncate.leading-tight.font-bold');
+                const descEl = card.querySelector('.text-dgray-400.truncate.text-xs');
+                [titleEl, descEl].forEach(el => {
+                    if (el) el.classList.add('cd-blur-target');
                 });
 
                 attachFilterBadge(card, 'blocked-tag', matchedBlockTags);
