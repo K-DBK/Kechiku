@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         케이브덕 커스텀 매니저
 // @namespace    http://tampermonkey.net/
-// @version      12.0
-// @description  우측 고정 4분할 슬라이드 설정 패널, 메인 배너 완전 제거, 제목/소개·제작자 분리 필터링(실제 DOM 구조 기반), 필터 매칭 시각화 뱃지, 자동 출석체크, React 대응 채팅 입력 주입, 첫대화 플로팅 버튼, 윙 잔액 실시간 표기
+// @version      13.0
+// @description  우측 고정 4분할 슬라이드 설정 패널, 메인 배너 완전 제거, 일반/공식 제작자 차단 지원, 태그 칩 입력 UI, 필터 매칭 시각화 뱃지, 자동 출석체크, React 대응 채팅 입력 주입, 첫대화 플로팅 버튼, 윙 잔액 실시간 표기
 // @match        *://caveduck.io/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -71,12 +71,12 @@
     // 실제 카드 구조(2026-06 기준):
     //   제목   -> div.truncate.leading-tight.font-bold
     //   소개   -> div.text-dgray-400.truncate.text-xs
-    //   제작자 -> span.text-official-creator (예: "@WH2TEPEACH")
+    //   제작자 -> span.text-creator (일반 제작자) 또는 span.text-official-creator (공식 제작자)
     // 카드 목록 화면에는 태그 칩이 별도로 렌더링되지 않으므로, "본문"은 제목+소개로 한정한다.
     function splitCardText(card) {
         const titleEl = card.querySelector('.truncate.leading-tight.font-bold');
         const descEl = card.querySelector('.text-dgray-400.truncate.text-xs');
-        const creatorEl = card.querySelector('.text-official-creator');
+        const creatorEl = card.querySelector('.text-creator, .text-official-creator');
 
         const bodyText = [titleEl, descEl]
             .filter(Boolean)
@@ -202,6 +202,36 @@
         }
         .cd-field input[type="text"]:focus, .cd-field textarea:focus { border-color: #FFD700; box-shadow: 0 0 8px rgba(255, 215, 0, 0.25); }
         .cd-help { font-size: 11px; color: #999; margin-top: 6px; display: block; line-height: 1.5; }
+
+        /* 태그 칩 입력 UI (선호 태그 / 차단 태그 / 제작자 차단 공용) */
+        .cd-chip-input-box {
+            display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+            width: 100%; box-sizing: border-box; padding: 8px 10px; min-height: 44px;
+            background: #1e1e24; border: 1px solid #4a4a5a; border-radius: 8px;
+            transition: all 0.2s;
+        }
+        .cd-chip-input-box:focus-within { border-color: #FFD700; box-shadow: 0 0 8px rgba(255, 215, 0, 0.25); }
+        .cd-chip-input-box input[type="text"] {
+            flex: 1 1 80px; min-width: 80px; border: none !important; background: transparent !important;
+            padding: 4px 2px !important; box-shadow: none !important; font-size: 13px;
+        }
+        .cd-chip-input-box input[type="text"]:focus { box-shadow: none !important; }
+        .cd-chip {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: rgba(255, 215, 0, 0.12); border: 1px solid rgba(255, 215, 0, 0.35);
+            color: #FFD700; font-size: 12px; font-weight: bold;
+            padding: 4px 6px 4px 10px; border-radius: 999px; white-space: nowrap;
+        }
+        .cd-chip-remove {
+            display: flex; align-items: center; justify-content: center;
+            width: 16px; height: 16px; border-radius: 50%; cursor: pointer;
+            color: #FFD700; opacity: 0.7; font-size: 12px; line-height: 1;
+            background: rgba(255,255,255,0.05);
+        }
+        .cd-chip-remove:hover { opacity: 1; background: rgba(255, 70, 70, 0.3); color: #fff; }
+        /* 차단 계열(태그차단/제작자차단)은 푸른색 톤으로 구분 */
+        .cd-chip-block { background: rgba(79, 172, 254, 0.12); border-color: rgba(79, 172, 254, 0.35); color: #4facfe; }
+        .cd-chip-block .cd-chip-remove { color: #4facfe; }
 
         /* 투명도 조절 인터페이스 */
         .cd-opacity-box {
@@ -450,23 +480,29 @@
 
                     <div class="cd-section-title">선호 태그 강조</div>
                     <div class="cd-field">
-                        <label>강조할 선호 태그/단어 (콤마로 구분)</label>
-                        <input type="text" id="cd-preferTags" value="${config.preferTags}" placeholder="예: 순애, 집착, 오리지널 캐릭터">
+                        <label>강조할 선호 태그/단어</label>
+                        <div class="cd-chip-input-box" id="cd-preferTags-box" data-config-key="preferTags">
+                            <input type="text" id="cd-preferTags-input" placeholder="입력 후 Enter">
+                        </div>
                         <span class="cd-help">챗봇의 <b>제목과 소개란</b>에서 매칭되면 <b>부드러운 노란색 배경 강조와 글로우 효과</b>로 정갈하게 표시됩니다 (제작자명은 검사하지 않음).</span>
                     </div>
 
                     <div class="cd-section-title">보기 싫은 태그 블라인드</div>
                     <div class="cd-field">
-                        <label>블라인드 처리할 태그/단어 (콤마로 구분)</label>
-                        <input type="text" id="cd-blockedTags" value="${config.blockedTags}" placeholder="예: 공포, 고어, BL, NTR">
+                        <label>블라인드 처리할 태그/단어</label>
+                        <div class="cd-chip-input-box" id="cd-blockedTags-box" data-config-key="blockedTags">
+                            <input type="text" id="cd-blockedTags-input" placeholder="입력 후 Enter">
+                        </div>
                         <span class="cd-help">챗봇의 <b>제목과 소개란</b>에서만 검사합니다 (제작자명은 검사하지 않음). 매칭되면 카드가 사라지지 않고 반투명도 설정에 따라 형태만 연하게 보이고 글씨는 흐려집니다.</span>
                     </div>
 
                     <div class="cd-section-title">제작자 차단</div>
                     <div class="cd-field">
-                        <label>차단할 제작자명/슬러그 (콤마로 구분)</label>
-                        <input type="text" id="cd-blockedCreators" value="${config.blockedCreators}" placeholder="예: dokta, @특정닉네임">
-                        <span class="cd-help">제작자 닉네임/슬러그가 매칭되면 해당 제작자의 카드가 <b>계정명까지 완전히 안 보이게</b> 사라집니다.</span>
+                        <label>차단할 제작자명/슬러그</label>
+                        <div class="cd-chip-input-box" id="cd-blockedCreators-box" data-config-key="blockedCreators">
+                            <input type="text" id="cd-blockedCreators-input" placeholder="입력 후 Enter">
+                        </div>
+                        <span class="cd-help">일반/공식 제작자 모두 대상이며, 닉네임이 매칭되면 해당 제작자의 카드가 <b>계정명까지 완전히 안 보이게</b> 사라집니다.</span>
                     </div>
 
                     <!-- 투명도 제어 슬라이더 (메인 탭 하단 탑재) -->
@@ -619,9 +655,9 @@
         function readDraft() {
             return {
                 hideBanner: panelContainer.querySelector('#cd-hideBanner').checked,
-                preferTags: panelContainer.querySelector('#cd-preferTags').value,
-                blockedTags: panelContainer.querySelector('#cd-blockedTags').value,
-                blockedCreators: panelContainer.querySelector('#cd-blockedCreators').value,
+                preferTags: config.preferTags,
+                blockedTags: config.blockedTags,
+                blockedCreators: config.blockedCreators,
                 blockedOpacity: parseInt(slider.value),
                 panelOpacity: parseInt(panelSlider.value),
                 showWingBadge: panelContainer.querySelector('#cd-showWingBadge').checked
@@ -638,18 +674,73 @@
             config.hideBanner = panelContainer.querySelector('#cd-hideBanner').checked;
             applyAll();
         });
-        panelContainer.querySelector('#cd-preferTags').addEventListener('input', () => {
-            config.preferTags = panelContainer.querySelector('#cd-preferTags').value;
-            applyAll();
-        });
-        panelContainer.querySelector('#cd-blockedTags').addEventListener('input', () => {
-            config.blockedTags = panelContainer.querySelector('#cd-blockedTags').value;
-            applyAll();
-        });
-        panelContainer.querySelector('#cd-blockedCreators').addEventListener('input', () => {
-            config.blockedCreators = panelContainer.querySelector('#cd-blockedCreators').value;
-            applyAll();
-        });
+
+        // 태그/제작자 칩 입력 UI 공용 초기화 함수.
+        // config[configKey]는 콤마 구분 문자열로 그대로 저장하되, 화면에는 칩+입력창으로 표시.
+        function setupChipInput(boxId, inputId, configKey, chipExtraClass) {
+            const box = panelContainer.querySelector(`#${boxId}`);
+            const input = panelContainer.querySelector(`#${inputId}`);
+
+            function getList() {
+                return config[configKey].split(',').map(s => s.trim()).filter(Boolean);
+            }
+
+            function setList(list) {
+                config[configKey] = list.join(', ');
+                renderChips();
+                applyAll();
+            }
+
+            function renderChips() {
+                box.querySelectorAll('.cd-chip').forEach(chip => chip.remove());
+                const list = getList();
+                list.forEach((term, idx) => {
+                    const chip = document.createElement('span');
+                    chip.className = 'cd-chip' + (chipExtraClass ? ' ' + chipExtraClass : '');
+                    chip.innerHTML = `<span class="cd-chip-text"></span><span class="cd-chip-remove">✕</span>`;
+                    chip.querySelector('.cd-chip-text').textContent = term;
+                    chip.querySelector('.cd-chip-remove').addEventListener('click', () => {
+                        const updated = getList().filter((_, i) => i !== idx);
+                        setList(updated);
+                    });
+                    box.insertBefore(chip, input);
+                });
+            }
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const val = input.value.trim();
+                    if (val) {
+                        const updated = getList();
+                        if (!updated.includes(val)) {
+                            updated.push(val);
+                            setList(updated);
+                        }
+                        input.value = '';
+                    }
+                } else if (e.key === 'Backspace' && input.value === '') {
+                    // 입력창이 비어있을 때 Backspace를 누르면 마지막 칩 제거
+                    const updated = getList();
+                    if (updated.length > 0) {
+                        updated.pop();
+                        setList(updated);
+                    }
+                }
+            });
+
+            // 입력창 어디를 클릭해도 텍스트 인풋에 포커스가 가도록
+            box.addEventListener('click', (e) => {
+                if (e.target === box) input.focus();
+            });
+
+            renderChips();
+        }
+
+        setupChipInput('cd-preferTags-box', 'cd-preferTags-input', 'preferTags');
+        setupChipInput('cd-blockedTags-box', 'cd-blockedTags-input', 'blockedTags', 'cd-chip-block');
+        setupChipInput('cd-blockedCreators-box', 'cd-blockedCreators-input', 'blockedCreators', 'cd-chip-block');
+
         panelContainer.querySelector('#cd-showWingBadge').addEventListener('change', () => {
             config.showWingBadge = panelContainer.querySelector('#cd-showWingBadge').checked;
             const wingBadge = document.querySelector('.cd-chat-utility-container .cd-wing-badge');
@@ -955,20 +1046,36 @@
     }
 
     function injectWingAndScrollWidgets() {
-        // 채팅 입력창(textarea[name="userInput"])을 기준으로 form 내부의 좌측 버튼 그룹을 탐색.
-        // "사진 추가"는 <button>이 아니라 <div>(file input을 감싼 래퍼)이므로 div 기준으로 찾아야 함.
+        // 채팅 입력창(textarea[name="userInput"])을 기준으로 form을 찾고,
+        // 그 form 안에서 "사진 추가" 텍스트를 가진 요소(버튼이 아니라 div인 경우도 있음)를 직접 탐색.
         const chatInput = document.querySelector('textarea[name="userInput"]');
         if (!chatInput) return;
 
         const form = chatInput.closest('form');
         if (!form) return;
 
-        // order-first 클래스가 붙은, 모델 선택/메모리/사진추가 버튼들이 모여있는 좌측 그룹
-        const accessoryBar = form.querySelector('.order-first');
-        if (!accessoryBar) return;
+        // 이미 주입되어 있으면 표시상태만 동기화하고 종료
+        const existingWrapper = form.querySelector('.cd-chat-utility-container');
+        if (existingWrapper) {
+            const existingBadge = existingWrapper.querySelector('.cd-wing-badge');
+            if (existingBadge) {
+                existingBadge.style.display = config.showWingBadge ? 'inline-flex' : 'none';
+            }
+            return;
+        }
 
-        // 중복 추가 처리 방지용 가드
-        if (accessoryBar.querySelector('.cd-chat-utility-container')) return;
+        // form 내부 전체에서 "사진" 텍스트를 포함하는 가장 안쪽(leaf에 가까운) 요소를 탐색.
+        // 사진 추가 영역은 <div class="...">...<span>사진 추가</span><input type="file"></div> 구조이므로
+        // querySelectorAll('*')을 돌면서 자기 자신은 "사진"을 포함하지만 자식 중에는 그런 게 없는 요소를 찾는다.
+        const candidates = Array.from(form.querySelectorAll('*')).filter(el => el.textContent.includes('사진'));
+        const photoEl = candidates.find(el => {
+            return !Array.from(el.children).some(child => child.textContent.includes('사진'));
+        }) || candidates[candidates.length - 1];
+
+        if (!photoEl) {
+            console.warn('[케이브덕 매니저] "사진 추가" 요소를 찾지 못해 윙 뱃지를 주입하지 못했습니다.');
+            return;
+        }
 
         // 윙 뱃지 래퍼 생성
         const wrapper = document.createElement('div');
@@ -990,13 +1097,8 @@
 
         wrapper.appendChild(wingBadge);
 
-        // "사진 추가" div 바로 뒤에 윙 뱃지를 삽입. 못 찾으면 액세서리 바 맨 끝에 추가.
-        const photoBtn = Array.from(accessoryBar.children).find(el => el.textContent.includes('사진'));
-        if (photoBtn) {
-            photoBtn.parentNode.insertBefore(wrapper, photoBtn.nextSibling);
-        } else {
-            accessoryBar.appendChild(wrapper);
-        }
+        // 사진 추가 요소가 속한 그룹(부모)의 형제 위치에 삽입 — photoEl 바로 뒤에 둔다.
+        photoEl.parentNode.insertBefore(wrapper, photoEl.nextSibling);
     }
 
     // "첫대화로 가기"를 크랙 플랫폼 스타일처럼 화면 우측 하단에 절대좌표로 고정된
